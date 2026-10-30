@@ -1,4 +1,4 @@
-# Atelier statistique — Raspberry Pi 5 + Samsung S23
+# Statistiques — Raspberry Pi 5 + Samsung S23
 
 Programme de statistiques du Pi 5, utilisable de 4 façons : application de bureau sur le Pi, bot Telegram depuis le S23, interface web Shiny depuis le Pi ou depuis le S23. Les calculs sont réalisés par **R** ; l'application de bureau et le bot sont en **Python**.
 
@@ -23,7 +23,7 @@ Programme de statistiques du Pi 5, utilisable de 4 façons : application de bure
 | `cli_statistique.R`            | Passerelle en ligne de commande vers le moteur R (résultats JSON + graphiques PNG)                                                                 |
 | `moteur_statistique.R`         | Fonctions de calcul R réutilisables                                                                                                                |
 | `app.R`                        | Interface web Shiny, facultative (voir plus bas)                                                                                                   |
-| `Statistiques.desktop`         | Lanceur pour le bureau                                                                                                                             |
+| `Statistiques.desktop`         | Lanceur pour le bureau (non versionné : il reste sur le bureau du Pi)                                                                              |
 | `icons/6Sigma.png`             | Icône de l'écran d'accueil et du lanceur                                                                                                           |
 
 ## Fonctionnalités
@@ -68,12 +68,16 @@ cd /home/jfbrunet/Projects/Statistiques
 python3 statistiques.py
 ```
 
-Lanceur sur le bureau :
+Lanceur sur le bureau : créer `~/Desktop/Statistiques.desktop` avec le contenu suivant, puis le rendre exécutable (`chmod +x ~/Desktop/Statistiques.desktop`) :
 
-```bash
-cp Statistiques.desktop ~/Desktop/
-cp Statistiques.desktop ~/.local/share/applications/
-chmod +x ~/Desktop/Statistiques.desktop
+```ini
+[Desktop Entry]
+Type=Application
+Name=Atelier statistique
+Exec=python3 /home/jfbrunet/Projects/Statistiques/statistiques.py
+Icon=/home/jfbrunet/Projects/Statistiques/icons/6Sigma.png
+Terminal=false
+Categories=Education;Science;
 ```
 
 Selon le gestionnaire de fichiers, un clic droit sur l'icône puis « Autoriser le lancement » peut être nécessaire la première fois.
