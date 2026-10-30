@@ -1,0 +1,2 @@
+# pour lancer l'interface http://localhost:3838
+# Taper statweb directement dans un terminal
