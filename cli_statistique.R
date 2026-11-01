@@ -123,7 +123,7 @@ cmd_descriptif <- function(d, p) {
        lignes = c(sprintf("%d série(s) numérique(s) analysée(s).", k),
                   paste0(tab$Serie, " — Shapiro-Wilk : ", tab$Interpretation_normalite)),
        tables = list(Descriptif = tab_aff), figures = c(fig1, fig2),
-       avertissements = list("Le test de Shapiro-Wilk ne prouve pas la normalité : l'absence de rejet n'est pas une preuve."))
+       avertissements = list())
 }
 
 cmd_normalite <- function(d, p) {
@@ -138,7 +138,7 @@ cmd_normalite <- function(d, p) {
   }
   concl <- if (is.na(pv)) "Test non calculable (n > 5000, données constantes ou trop peu de valeurs distinctes)."
            else if (pv < 0.05) "La normalité est rejetée au seuil de 5 %."
-           else "La normalité n'est pas rejetée au seuil de 5 % (cela ne prouve pas la normalité)."
+           else "La normalité n'est pas rejetée au seuil de 5 %."
   fig <- lire_png("normalite.png", largeur = 1000, hauteur = 480)
   par(mfrow = c(1, 2), mar = c(4.5, 4.5, 3, 1))
   hist(x, freq = FALSE, main = paste("Distribution :", nom), xlab = "Mesure", ylab = "Densité", col = "#cfe0f5", border = "white")
@@ -150,7 +150,9 @@ cmd_normalite <- function(d, p) {
        lignes = c(sprintf("Effectif : %d", n), sprintf("Statistique W : %s", fmt(W)),
                   sprintf("p-value : %s", fmt_p(pv)), concl),
        tables = list(), figures = c(fig),
-       avertissements = list("Avec de grands effectifs, de petits écarts à la normalité deviennent significatifs ; avec de petits effectifs, le test manque de puissance. Examiner aussi le graphique."))
+       avertissements = if (!is.na(pv) && pv < 0.05)
+         list("Un rejet peut venir d'un petit écart sans importance pratique, surtout avec un grand effectif : examiner aussi le graphique.")
+       else list())
 }
 
 cohen_d <- function(x, y = NULL, mu = 0, paired = FALSE) {
@@ -306,8 +308,96 @@ cmd_capabilite <- function(d, p) {
   list(titre = paste("Capabilité —", nom), lignes = l, tables = list(Indicateurs = longue), figures = c(fig), avertissements = avert)
 }
 
+ch_cat <- function(v) {
+  v <- trimws(as.character(v))
+  v[is.na(v) | v == ""] <- NA_character_
+  v
+}
+
+# Kappa de chaque évaluateur contre une colonne de référence (norme), avec verdict, et évaluateurs entre eux.
+cmd_kappa_reference <- function(d, p) {
+  rn <- nom_colonne(d, p$reference, "Référence (norme)")
+  evs <- setdiff(unique(as.character(unlist(p$evaluateurs))), rn)
+  if (!length(evs)) stop("Sélectionnez au moins un évaluateur, différent de la colonne de référence.", call. = FALSE)
+  for (e in evs) nom_colonne(d, e, "Évaluateur")
+  r0 <- ch_cat(d[[rn]])
+  X <- lapply(evs, function(e) ch_cat(d[[e]]))
+  names(X) <- evs
+
+  tab <- do.call(rbind, lapply(evs, function(e) {
+    x <- X[[e]]
+    ok <- !is.na(x) & !is.na(r0)
+    n <- sum(ok)
+    if (n == 0) stop(sprintf("Aucune paire valide entre « %s » et la référence.", e), call. = FALSE)
+    k <- kappa_agreement(r0, x)
+    acc <- sum(x[ok] == r0[ok])
+    ic <- stats::binom.test(acc, n)$conf.int
+    data.frame(Evaluateur = e, Paires = n, Accords = acc, Accord_pct = round(100 * acc / n, 1),
+               IC_inf = round(100 * ic[1], 1), IC_sup = round(100 * ic[2], 1),
+               Kappa = k$kappa_cohen, Verdict = verdict_kappa(k$kappa_cohen), stringsAsFactors = FALSE)
+  }))
+
+  E <- do.call(cbind, X)
+  compl <- !is.na(r0) & rowSums(is.na(E)) == 0
+  nc <- sum(compl)
+  tous <- if (nc > 0) sum(vapply(which(compl), function(i) all(E[i, ] == r0[i]), logical(1))) else 0L
+  ligne_tous <- if (nc > 0) {
+    icc <- stats::binom.test(tous, nc)$conf.int
+    sprintf("Échantillons évalués par tous : %d — tous d'accord avec la référence : %d (%s %%, IC à 95 %% : %s à %s %%)",
+            nc, tous, fmt(round(100 * tous / nc, 1)), fmt(round(100 * icc[1], 1)), fmt(round(100 * icc[2], 1)))
+  } else "Aucun échantillon n'est évalué par tous les évaluateurs."
+  grp <- function(lib) { z <- tab$Evaluateur[tab$Verdict == lib]; if (length(z)) paste(z, collapse = ", ") else "aucun" }
+  lignes <- c(sprintf("Référence (norme) : « %s » — %d évaluateur(s) : %s", rn, length(evs), paste(evs, collapse = ", ")),
+              ligne_tous, "",
+              sprintf("Satisfaisants (Kappa > 0,75) : %s", grp("Satisfaisant")),
+              sprintf("À améliorer (Kappa de 0,40 à 0,75) : %s", grp("À améliorer")),
+              sprintf("Insuffisants (Kappa < 0,40) : %s", grp("Insuffisant")),
+              "", KAPPA_REFERENCES)
+
+  tables <- list(Evaluateurs_vs_reference = tab)
+  if (length(evs) >= 2) {
+    cb <- utils::combn(evs, 2)
+    pair <- do.call(rbind, lapply(seq_len(ncol(cb)), function(i) {
+      x <- X[[cb[1, i]]]; y <- X[[cb[2, i]]]
+      ok <- !is.na(x) & !is.na(y)
+      if (!any(ok)) return(NULL)
+      k <- kappa_agreement(x, y)
+      data.frame(Evaluateur_1 = cb[1, i], Evaluateur_2 = cb[2, i], Paires = sum(ok),
+                 Accord_pct = round(100 * mean(x[ok] == y[ok]), 1), Kappa = k$kappa_cohen, stringsAsFactors = FALSE)
+    }))
+    if (!is.null(pair)) tables$Evaluateurs_entre_eux <- pair
+  }
+  if (length(evs) <= 4) {
+    for (e in evs) {
+      m <- as.data.frame.matrix(kappa_agreement(r0, X[[e]])$matrice)
+      m <- cbind(Reference = rownames(m), m, stringsAsFactors = FALSE)
+      rownames(m) <- NULL
+      tables[[paste0("Matrice de confusion — ", e)]] <- m
+    }
+  }
+
+  fig <- lire_png("kappa_evaluateurs.png", largeur = max(700, 120 * length(evs) + 300), hauteur = 520)
+  par(mar = c(6, 4.5, 3, 1))
+  kv <- tab$Kappa; kv[is.na(kv)] <- 0
+  couleurs <- ifelse(kv > .75, "#2e8b57", ifelse(kv >= .40, "#e0a030", "#b03030"))
+  bp <- barplot(kv, names.arg = tab$Evaluateur, ylim = c(min(0, min(kv)), 1.08), col = couleurs, ylab = "Kappa contre la référence",
+                main = "Accord de chaque évaluateur avec la référence (norme)", las = if (length(evs) > 6) 2 else 1)
+  abline(h = c(.40, .75), lty = 2, col = "#444444")
+  text(bp, kv, labels = ifelse(is.na(tab$Kappa), "n.c.", fmt(kv, 3)), pos = ifelse(kv >= 0, 3, 1), cex = 0.9)
+  mtext("Pointillés : repères AIAG (Kappa = 0,40 et 0,75)", side = 1, line = 4.5, cex = 0.85)
+  invisible(dev.off())
+
+  avert <- list("Kappa non pondéré. Pour des catégories ordinales, une version pondérée peut être préférable.",
+                "Le résultat dépend de la qualité de la référence : elle doit être établie indépendamment des évaluateurs (expert, étalon).",
+                "La valeur du Kappa dépend de la prévalence des catégories : examiner aussi l'accord observé et les matrices de confusion.")
+  if (min(tab$Paires) < 30) avert <- c(avert, list("Moins de 30 échantillons : les intervalles de confiance de l'accord sont larges, interpréter avec prudence."))
+  list(titre = sprintf("Évaluateurs et référence (norme) — Kappa de Cohen — « %s »", rn),
+       lignes = lignes, tables = tables, figures = c(fig), avertissements = avert)
+}
+
 cmd_kappa <- function(d, p) {
-  an <- nom_colonne(d, p$a, "Évaluation de référence"); bn <- nom_colonne(d, p$b, "Deuxième évaluation")
+  if (!is.null(p$reference) && nzchar(p$reference)) return(cmd_kappa_reference(d, p))
+  an <- nom_colonne(d, p$a, "Première évaluation"); bn <- nom_colonne(d, p$b, "Deuxième évaluation")
   r <- kappa_agreement(d[[an]], d[[bn]])
   m <- as.data.frame.matrix(r$matrice)
   m <- cbind(Reference = rownames(m), m, stringsAsFactors = FALSE)
@@ -316,7 +406,7 @@ cmd_kappa <- function(d, p) {
        lignes = c(sprintf("Paires valides : %d", r$effectif),
                   sprintf("Accord observé : %s %%", fmt(round(r$accord_observe * 100, 2), 5)),
                   sprintf("Accord attendu par hasard : %s %%", fmt(round(r$accord_attendu * 100, 2), 5)),
-                  sprintf("Kappa : %s", fmt(r$kappa_cohen, 4)), r$interpretation),
+                  sprintf("Kappa : %s", fmt(r$kappa_cohen, 4)), r$interpretation, "", r$reference),
        tables = list(Matrice_de_confusion = m), figures = character(0),
        avertissements = list(r$note, "La valeur du Kappa dépend de la prévalence des catégories : examiner aussi la matrice et l'accord observé."))
 }

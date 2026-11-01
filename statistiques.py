@@ -38,6 +38,7 @@ TITRE = "Statistiques"
 MAX_LIGNES = 200_000
 
 MANQUANTS = {"", "na", "n/a", "nan", "null", "none"}
+MOTS_REFERENCE = ("ref", "réf", "norme", "standard", "etalon", "étalon", "expert", "vrai")   # noms de colonne de référence
 RE_DEC_VIRGULE = re.compile(r"^[-+]?\d+,\d+$")
 RE_DEC_POINT = re.compile(r"^[-+]?\d+\.\d+$")
 RE_ENTIER = re.compile(r"^[-+]?\d+$")
@@ -306,10 +307,16 @@ LIBELLES = {"Serie": "Série", "Mediane": "Médiane", "Ecart_type": "Écart-type
             "Sigma_global": "σ global", "Sigma_intra_fourni": "σ intra fourni", "Borne_inf": "Borne inf.", "Borne_sup": "Borne sup.",
             "p_value": "p-value", "p_ajustee": "p ajustée", "Somme_carres": "Somme des carrés", "Carre_moyen": "Carré moyen",
             "PPM_estimes_sous_LSL": "PPM estimés sous LSL", "PPM_estimes_sur_USL": "PPM estimés sur USL", "ddl": "ddl",
-            "Reference": "Référence \\ Évaluation", "Series": "Séries"}
+            "Reference": "Référence \\ Évaluation", "Series": "Séries",
+            "Evaluateur": "Évaluateur", "Evaluateur_1": "Évaluateur 1", "Evaluateur_2": "Évaluateur 2",
+            "Accord_pct": "Accord (%)", "IC_inf": "IC 95 % inf. (%)", "IC_sup": "IC 95 % sup. (%)",
+            "Evaluateurs_vs_reference": "Évaluateurs / référence (norme)",
+            "Evaluateurs_entre_eux": "Évaluateurs entre eux (Kappa deux à deux)"}
 
 
 def libelle(c):
+    if " — " in str(c):                      # titre déjà composé (ex. matrice de confusion d'un évaluateur)
+        return str(c)
     return LIBELLES.get(c, str(c).replace("_", " "))
 
 
@@ -503,6 +510,15 @@ class Etude:
     def kappa(self, a, b):
         return self._r("kappa", {"a": a, "b": b})
 
+    def kappa_reference(self, reference, evaluateurs):
+        """Kappa de chaque évaluateur contre une colonne de référence (norme), et des évaluateurs entre eux."""
+        if not reference:
+            raise ErreurStat("Choisir la colonne de référence (norme).")
+        evaluateurs = [e for e in evaluateurs if e != reference]
+        if not evaluateurs:
+            raise ErreurStat("Sélectionner au moins un évaluateur, différent de la colonne de référence.")
+        return self._r("kappa", {"reference": reference, "evaluateurs": evaluateurs})
+
 
 TEXTE_AIDE = """\
 Statistiques — aide
@@ -515,6 +531,8 @@ Données :
 • Fichiers : txt, csv, tsv, dat, xlsx. Les options de lecture permettent de forcer le séparateur,
   la décimale ou la présence d'une ligne de noms.
 • Une saisie sans ligne de noms est possible si toutes les valeurs de la première ligne sont numériques.
+• Pour un Kappa avec référence : une ligne par échantillon, une colonne de référence (reconnue automatiquement
+  si son nom évoque une référence ou une norme) et une colonne par évaluateur ou par essai.
 
 Analyses : 
 • Descriptif : effectif, moyenne, médiane, écart-type, variance, quartiles, extrêmes, Shapiro-Wilk.
@@ -524,11 +542,16 @@ Analyses :
   comparaisons de Tukey si le test global est significatif.
 • Capabilité : Pp/Ppk à partir de l'écart-type global ; Cp/Cpk/Cm/Cmk uniquement si un écart-type
   intra-sous-groupe est fourni. Au moins une limite de spécification est requise.
-• Kappa de Cohen : accord entre deux évaluations catégorielles (non pondéré).
+• Kappa de Cohen (non pondéré), deux modes :
+  – deux évaluations : accord entre deux colonnes de catégories ;
+  – référence (norme) : une colonne de référence et une colonne par évaluateur (ou par essai) ; le Kappa
+    de chaque évaluateur contre la référence dit s'il est satisfaisant (> 0,75), à améliorer (0,40 à 0,75)
+    ou insuffisant (< 0,40), avec l'accord en % et son intervalle de confiance, et l'accord des évaluateurs
+    entre eux.
+  Interprétation selon l'échelle de Landis et Koch (1977) ; repères AIAG (MSA) pour les systèmes de mesure.
 
 Précautions : 
 • Une p-value ne mesure ni l'importance pratique d'un effet ni la probabilité que l'hypothèse soit vraie.
-• Un test de normalité non significatif ne prouve pas la normalité.
 • Vérifier l'indépendance des observations, la stabilité du procédé et les unités avant toute décision.
 • Les PPM reposent sur une loi normale ajustée : ils sont indicatifs.
 """
@@ -1154,19 +1177,35 @@ class Application:
         f = self._onglet(nb, "Kappa")
         c = ttk.Frame(f)
         c.pack(fill="x", padx=8, pady=8)
-        self.v_ka, self.v_kb = tk.StringVar(), tk.StringVar()
-        ttk.Label(c, text="Évaluation de référence").grid(row=0, column=0, sticky="e", padx=4, pady=3)
+        self.v_kmode = tk.StringVar(value="deux")
+        self.v_ka, self.v_kb, self.v_kref = tk.StringVar(), tk.StringVar(), tk.StringVar()
+        ttk.Radiobutton(c, text="Comparer deux évaluations", variable=self.v_kmode, value="deux").grid(row=0, column=0, columnspan=3, sticky="w")
+        ttk.Label(c, text="Première évaluation").grid(row=1, column=0, sticky="e", padx=(20, 4), pady=3)
         self.cb_ka = self._combo(c, self.v_ka)
-        self.cb_ka.grid(row=0, column=1, sticky="w")
-        ttk.Label(c, text="Deuxième évaluation").grid(row=1, column=0, sticky="e", padx=4, pady=3)
+        self.cb_ka.grid(row=1, column=1, sticky="w")
+        ttk.Label(c, text="Deuxième évaluation").grid(row=2, column=0, sticky="e", padx=(20, 4), pady=3)
         self.cb_kb = self._combo(c, self.v_kb)
-        self.cb_kb.grid(row=1, column=1, sticky="w")
-        ttk.Button(c, text="Calculer", command=self.run_kappa).grid(row=2, column=1, sticky="w", pady=8)
+        self.cb_kb.grid(row=2, column=1, sticky="w")
+        ttk.Radiobutton(c, text="Comparer des évaluateurs à une référence (norme)", variable=self.v_kmode, value="ref").grid(row=3, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        ttk.Label(c, text="Référence (norme)").grid(row=4, column=0, sticky="e", padx=(20, 4), pady=3)
+        self.cb_kref = self._combo(c, self.v_kref)
+        self.cb_kref.grid(row=4, column=1, sticky="w")
+        ttk.Label(c, text="Évaluateurs").grid(row=5, column=0, sticky="ne", padx=(20, 4), pady=3)
+        cadre, self.lb_kev = self._liste_multi(c)
+        cadre.grid(row=5, column=1, sticky="w", pady=3)
+        ttk.Label(c, text="Une ligne par échantillon : une colonne pour la référence (valeur reconnue) et une colonne par évaluateur (ou par essai).\n"
+                          "Kappa > 0,75 : satisfaisant ; de 0,40 à 0,75 : à améliorer ; < 0,40 : insuffisant (repères AIAG).").grid(row=5, column=2, sticky="w", padx=12)
+        ttk.Button(c, text="Calculer", command=self.run_kappa).grid(row=6, column=1, sticky="w", pady=8)
         self.z_kappa = self._nouvelle_zone(f)
 
     def run_kappa(self):
-        a, b = self.v_ka.get(), self.v_kb.get()
-        self.lancer(self.z_kappa, lambda: self.etude.kappa(a, b))
+        if self.v_kmode.get() == "ref":
+            ref = self.v_kref.get()
+            evs = [self.lb_kev.get(i) for i in self.lb_kev.curselection()]
+            self.lancer(self.z_kappa, lambda: self.etude.kappa_reference(ref, evs))
+        else:
+            a, b = self.v_ka.get(), self.v_kb.get()
+            self.lancer(self.z_kappa, lambda: self.etude.kappa(a, b))
 
     def _onglet_aide(self, nb):
         tk = self.tk
@@ -1192,7 +1231,7 @@ class Application:
         self.lb_anova.select_set(0, "end")
         for cb, vals, var in [(self.cb_norm, num, self.v_norm), (self.cb_tx, num, self.v_tx), (self.cb_cap, num, self.v_cs),
                               (self.cb_aval, num, self.v_aval), (self.cb_agrp, tout, self.v_agrp),
-                              (self.cb_ka, tout, self.v_ka), (self.cb_kb, tout, self.v_kb)]:
+                              (self.cb_ka, tout, self.v_ka), (self.cb_kb, tout, self.v_kb), (self.cb_kref, tout, self.v_kref)]:
             cb["values"] = vals
             var.set(vals[0] if vals else "")
         self.cb_ty["values"] = ["— un échantillon —"] + num
@@ -1203,6 +1242,20 @@ class Application:
         if len(cand) >= 2:
             self.v_ka.set(cand[0])
             self.v_kb.set(cand[1])
+        self.lb_kev.delete(0, "end")
+        for n in tout:
+            self.lb_kev.insert("end", n)
+        refs = [n for n in tout if any(m in n.lower() for m in MOTS_REFERENCE)]
+        if refs:                                       # colonne de référence (norme) reconnue par son nom : mode référence
+            ref, evs = refs[0], [n for n in cand if n != refs[0]]
+            self.v_kmode.set("ref")
+        else:
+            ref, evs = (cand[0] if cand else ""), cand[1:]
+            self.v_kmode.set("deux")
+        self.v_kref.set(ref)
+        for i, n in enumerate(tout):
+            if n in evs:
+                self.lb_kev.select_set(i)
         if txt and num:                                # colonne de groupes textuelle : format long par défaut
             self.v_amode.set("long")
             self.v_agrp.set(txt[0])

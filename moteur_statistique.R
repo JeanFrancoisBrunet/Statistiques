@@ -24,7 +24,7 @@ resume_serie <- function(x, nom = "Série") {
   } else if (p_norm < 0.05) {
     "La normalité est rejetée au seuil de 5 %."
   } else {
-    "La normalité n'est pas rejetée au seuil de 5 % (cela ne prouve pas la normalité)."
+    "La normalité n'est pas rejetée au seuil de 5 %."
   }
   data.frame(
     Serie = nom, n = n, Moyenne = mean(x), Mediane = stats::median(x),
@@ -130,6 +130,23 @@ indices_capabilite <- function(x, LSL = NA_real_, USL = NA_real_, cible = NA_rea
   )
 }
 
+# Références d'interprétation du Kappa (affichées avec chaque résultat).
+KAPPA_REFERENCES <- c(
+  "Coefficient : Cohen (1960), Educational and Psychological Measurement 20(1):37-46.",
+  "Échelle d'interprétation : Landis et Koch (1977), Biometrics 33:159-174 —",
+  "0 à 0,20 très faible ; 0,21 à 0,40 faible ; 0,41 à 0,60 modéré ;",
+  "0,61 à 0,80 important ; 0,81 à 1 presque parfait.",
+  "Systèmes de mesure (AIAG, manuel MSA) : Kappa > 0,75 bon à excellent ; Kappa < 0,40 insuffisant."
+)
+
+# Verdict d'un évaluateur selon les repères AIAG (MSA) : > 0,75 satisfaisant ; < 0,40 insuffisant.
+verdict_kappa <- function(k) {
+  if (is.na(k)) "non calculable"
+  else if (k > 0.75) "Satisfaisant"
+  else if (k >= 0.40) "À améliorer"
+  else "Insuffisant"
+}
+
 kappa_agreement <- function(reference, evaluateur, poids = c("unweighted", "squared")) {
   if (length(reference) != length(evaluateur)) stop("Les deux évaluations doivent avoir la même longueur.", call. = FALSE)
   ok <- !is.na(reference) & !is.na(evaluateur)
@@ -148,8 +165,9 @@ kappa_agreement <- function(reference, evaluateur, poids = c("unweighted", "squa
   k <- if (abs(1 - pe) < .Machine$double.eps) NA_real_ else (po - pe) / (1 - pe)
   list(effectif = n, matrice = tab, accord_observe = po, accord_attendu = pe,
        kappa_cohen = k,
-       interpretation = if (is.na(k)) "Kappa non défini (accord attendu égal à 1)." else if (k < 0) "Accord inférieur à celui attendu par hasard." else if (k < .20) "Accord faible." else if (k < .40) "Accord léger." else if (k < .60) "Accord modéré." else if (k < .80) "Accord important." else "Accord très important.",
-       note = "Kappa non pondéré. Pour des catégories ordinales, une version pondérée peut être préférable.")
+       interpretation = if (is.na(k)) "Kappa non défini (accord attendu égal à 1)." else if (k < 0) "Accord inférieur à celui attendu par hasard." else if (k <= .20) "Accord très faible." else if (k <= .40) "Accord faible." else if (k <= .60) "Accord modéré." else if (k <= .80) "Accord important." else "Accord presque parfait.",
+       reference = KAPPA_REFERENCES,
+       note ="Kappa non pondéré. Pour des catégories ordinales, une version pondérée peut être préférable.")
 }
 
 donnees_longues <- function(donnees) {

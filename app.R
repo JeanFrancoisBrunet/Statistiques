@@ -112,11 +112,11 @@ ui <- fluidPage(
           h4("Interprétation responsable"),
           tags$ul(
             tags$li("p-value : elle ne mesure ni l'importance pratique de l'effet ni la probabilité que l'hypothèse soit vraie."),
-            tags$li("Shapiro-Wilk : l'absence de rejet ne prouve pas que les données sont normales ; avec de grands effectifs, de petits écarts peuvent devenir significatifs."),
+            tags$li("Shapiro-Wilk : avec de grands effectifs, de petits écarts à la normalité sans importance pratique peuvent devenir significatifs ; examiner aussi les graphiques."),
             tags$li("Test t : vérifier l'indépendance, la forme des données et les conditions du test choisi. Le test de Welch est le choix par défaut pour deux échantillons indépendants."),
             tags$li("ANOVA : vérifier les résidus, l'indépendance et l'homogénéité des variances ; une ANOVA significative nécessite des comparaisons post-hoc pour identifier les groupes concernés."),
             tags$li("Capabilité : Cp/Cpk et Cm/Cmk ne sont interprétables que si la méthode de calcul de la variation intra est appropriée et le procédé suffisamment stable. Pp/Ppk utilisent la dispersion globale."),
-            tags$li("Kappa : la valeur dépend notamment de la prévalence des catégories ; examiner aussi la matrice de confusion et l'accord observé.")
+            tags$li("Kappa : la valeur dépend notamment de la prévalence des catégories ; examiner aussi la matrice de confusion et l'accord observé. Interprétation : Landis et Koch (1977) ; systèmes de mesure (AIAG, MSA) : Kappa > 0,75 bon à excellent, Kappa < 0,40 insuffisant.")
           ),
           div(class = "stat-note", "Cette première version est un outil d'aide à l'analyse, pas une validation métrologique ou qualité automatique. Vérifiez les données, les hypothèses et les unités avant toute décision.")
         )
@@ -322,7 +322,8 @@ server <- function(input, output, session) {
         cat("Accord attendu :", round(res$accord_attendu * 100, 2), "%\n")
         cat("Kappa de Cohen :", signif(res$kappa_cohen, 6), "\n")
         cat(res$interpretation, "\n")
-        cat(res$note, "\n")
+        cat(res$note, "\n\n")
+        cat(res$reference, sep = "\n")
       })
       output$kappa_table <- renderDT(datatable(as.data.frame.matrix(res$matrice), options = list(scrollX = TRUE), rownames = TRUE))
     }, error = function(e) {

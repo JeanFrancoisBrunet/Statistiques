@@ -34,7 +34,7 @@ Programme de statistiques du Pi 5, utilisable de 4 façons : application de bure
 - **Tests t** : un échantillon, deux échantillons indépendants (Welch par défaut, variances égales en option), échantillons appariés ; hypothèse bilatérale ou unilatérale ; intervalle de confiance et taille d'effet (d de Cohen).
 - **ANOVA à un facteur** : colonnes = groupes ou format long (colonne de mesures + colonne de groupes) ; contrôle des résidus (Shapiro-Wilk) et de l'homogénéité des variances (Fligner-Killeen) ; comparaisons deux à deux de Tukey si le test global est significatif.
 - **Capabilité** : Pp/Ppk à partir de l'écart-type global ; Cp/Cpk/Cm/Cmk uniquement si un écart-type intra-sous-groupe est fourni ; PPM estimés ; histogramme avec limites de spécification.
-- **Kappa de Cohen** non pondéré, avec matrice de confusion.
+- **Kappa de Cohen** non pondéré, avec matrice de confusion, en deux modes : comparaison de deux évaluations, ou comparaison d'un ou plusieurs évaluateurs à une **colonne de référence (norme)** (application de bureau). Dans ce second mode : Kappa de chaque évaluateur contre la référence avec un verdict (satisfaisant, à améliorer, insuffisant), accord en % et intervalle de confiance, accord de tous les évaluateurs avec la référence, Kappa des évaluateurs deux à deux et graphique. Interprétation selon l'échelle de Landis et Koch (1977) ; repères AIAG (MSA) pour les systèmes de mesure : Kappa > 0,75 bon à excellent, Kappa < 0,40 insuffisant. Les références sont rappelées avec chaque résultat.
 
 ## Installation sur le Pi
 
@@ -157,17 +157,17 @@ sudo systemctl restart telegram-bot-statistiques   # après modification du bot 
 - **Analyser** : boutons du menu ou commandes ; les colonnes se désignent par leur numéro (affiché après le chargement et par `/etat`) ou par leur nom.
 - Les résultats arrivent en texte à chasse fixe, suivis des graphiques en images.
 
-| Commande                                                          | Rôle                                                                       |
-|---                                                                |---                                                                         |
-| `/donnees`, `/etat`                                               | Aide au chargement ; colonnes et effectifs                                 |
-| `/descriptif`                                                     | Statistiques descriptives                                                  |
-| `/normalite [colonne]`                                            | Test de normalité                                                          |
-| `/t [X] [Y ou 0] [welch\|apparie\|egales] [sup\|inf] [mu=valeur]` | Test t (`0` à la place de Y : un échantillon)                              |
-| `/anova [colonnes \| mesures groupes]`                            | ANOVA                                                                      |
-| `/capa [colonne] [LSL] [USL] [cible] [σ intra]`                   | Capabilité (`-` pour une valeur absente)                                   |
-| `/kappa [évaluation 1] [évaluation 2]`                            | Kappa de Cohen                                                             |
-| `/lecture`                                                        | Forcer séparateur, décimale, ligne de noms ; relit les données déjà reçues |
-| `/export`, `/effacer`, `/annuler`                                 | Récupérer les données en CSV ; effacer ; annuler une saisie en attente     |
+| Commande                                                          | Rôle                                                                        |
+|---                                                                |---                                                                          |
+| `/donnees`, `/etat`                                               | Aide au chargement ; colonnes et effectifs                                  |
+| `/descriptif`                                                     | Statistiques descriptives                                                   |
+| `/normalite [colonne]`                                            | Test de normalité                                                           |
+| `/t [X] [Y ou 0] [welch\|apparie\|egales] [sup\|inf] [mu=valeur]` | Test t (`0` à la place de Y : un échantillon)                               |
+| `/anova [colonnes \| mesures groupes]`                            | ANOVA                                                                       |
+| `/capa [colonne] [LSL] [USL] [cible] [σ intra]`                   | Capabilité (`-` pour une valeur absente)                                    |
+| `/kappa [évaluation 1] [évaluation 2]`                            | Kappa de Cohen entre deux colonnes (mode référence : application de bureau) |
+| `/lecture`                                                        | Forcer séparateur, décimale, ligne de noms ; relit les données déjà reçues  |
+| `/export`, `/effacer`, `/annuler`                                 | Récupérer les données en CSV ; effacer ; annuler une saisie en attente      |
 
 Les données d'une conversation ne sont conservées **qu'en mémoire du bot** : rien n'est écrit sur disque, et elles disparaissent à l'arrêt du bot.
 
@@ -229,10 +229,11 @@ L'application n'a pas d'authentification : l'arrêter avec `statweb_stop` quand 
 - Les cellules vides et les mentions `NA` sont des valeurs manquantes ; des séries de longueurs différentes sont acceptées (colonnes complétées par des valeurs manquantes).
 - Une colonne contenant au moins une valeur non numérique est traitée comme du texte (groupes, évaluations catégorielles) et un avertissement l'indique.
 - Pour un test apparié, les paires incomplètes sont écartées ensemble.
+- Pour un Kappa avec référence : une ligne par échantillon, une colonne de référence (reconnue automatiquement si son nom évoque une référence ou une norme) et une colonne par évaluateur ou par essai. Les évaluateurs entre eux permettent de juger la répétabilité quand chaque essai est une colonne.
 
 ## Précautions statistiques importantes
 
-- La p-value de Shapiro-Wilk n'est pas une preuve absolue de normalité. Le test est disponible pour 3 à 5000 observations et n'est pas calculable si les données sont constantes.
+- Le test de Shapiro-Wilk est disponible pour 3 à 5000 observations et n'est pas calculable si les données sont constantes.
 - Les tests et l'ANOVA exigent de vérifier les hypothèses et le plan d'échantillonnage (indépendance des observations en particulier).
 - **Cp/Cpk et Cm/Cmk ne sont pas calculés sans écart-type intra-sous-groupe** : l'écart-type global n'est jamais substitué automatiquement. Pp/Ppk utilisent l'écart-type global.
 - Les PPM reposent sur une loi normale ajustée aux données : ils sont indicatifs et peuvent être trompeurs si le procédé n'est pas stable ou les données non normales.
