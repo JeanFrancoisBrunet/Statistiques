@@ -19,16 +19,19 @@
 
 import atexit
 import csv
+import datetime
 import json
 import math
 import os
 import queue
+import random
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import threading
+import zipfile
 from pathlib import Path
 
 DOSSIER = Path(__file__).resolve().parent
@@ -36,6 +39,11 @@ ICONE = DOSSIER / "icons" / "6Sigma.png"
 SCRIPT_R = DOSSIER / "cli_statistique.R"
 TITRE = "Statistiques"
 MAX_LIGNES = 200_000
+MAX_GENERE = 100_000                     # nombre maximal de valeurs générées en une fois
+EXT_PROJET = ".statproj"                 # fichier de projet (archive zip : données, résultats, graphiques)
+FORMAT_PROJET = "Atelier statistique"
+VERSION_PROJET = 1
+TITRE_RAPPORT = "Rapport d'analyse statistique"
 
 MANQUANTS = {"", "na", "n/a", "nan", "null", "none"}
 MOTS_REFERENCE = ("ref", "réf", "norme", "standard", "etalon", "étalon", "expert", "vrai")   # noms de colonne de référence
@@ -110,6 +118,11 @@ def _decimale(champs, sep):
     return "," if virg > pt else "."
 
 
+def _nom_propre(nom):
+    """Nom de colonne sans séparateur ni guillemet ni saut de ligne."""
+    return re.sub(r"[;\t\r\n\"]+", " ", str(nom)).strip()
+
+
 class Donnees:
     """Jeu de données : colonnes nommées, numériques (float / None) ou texte (str / None)."""
 
@@ -143,6 +156,55 @@ class Donnees:
         n = self.nb_lignes if limite is None else min(limite, self.nb_lignes)
         cols = [self.colonnes[k] for k in self.noms]
         return [[(c[i] if i < len(c) else None) for c in cols] for i in range(n)]
+
+    def ajouter_colonne(self, nom, valeurs, type_="num"):
+        """Ajoute une colonne ; le nom est rendu unique. Retourne le nom effectivement utilisé."""
+        base = _nom_propre(nom) or "Serie"
+        n, k = base, 2
+        while n in self.colonnes:
+            n = f"{base}_{k}"
+            k += 1
+        self.colonnes[n] = list(valeurs)
+        self.types[n] = type_
+        return n
+
+    def vers_dict(self):
+        return {"colonnes": self.colonnes, "types": self.types,
+                "avertissements": self.avertissements, "source": self.source}
+
+    @classmethod
+    def depuis_dict(cls, d):
+        """Reconstruit un jeu de données à partir d'un fichier de projet (contrôle du contenu)."""
+        invalide = ErreurStat("Fichier de projet invalide : données illisibles.")
+        if not isinstance(d, dict) or not isinstance(d.get("colonnes"), dict) or not isinstance(d.get("types"), dict):
+            raise invalide
+        colonnes, types = {}, {}
+        for nom, vals in d["colonnes"].items():
+            t = d["types"].get(nom)
+            if t not in ("num", "txt") or not isinstance(vals, list) or len(vals) > MAX_LIGNES:
+                raise invalide
+            if t == "num":
+                if not all(v is None or (isinstance(v, (int, float)) and not isinstance(v, bool)) for v in vals):
+                    raise invalide
+                colonnes[str(nom)] = [None if v is None else float(v) for v in vals]
+            else:
+                if not all(v is None or isinstance(v, str) for v in vals):
+                    raise invalide
+                colonnes[str(nom)] = list(vals)
+            types[str(nom)] = t
+        if not colonnes:
+            raise invalide
+        avert = d.get("avertissements")
+        avert = [a for a in avert if isinstance(a, str)] if isinstance(avert, list) else []
+        return cls(colonnes, types, avert, str(d.get("source") or "projet"))
+
+    def resume_rapport(self):
+        """Description des données pour le rapport PDF."""
+        cols = []
+        for n in self.noms:
+            valides = sum(1 for x in self.colonnes[n] if x is not None)
+            cols.append((n, "numérique" if self.types[n] == "num" else "texte", valides, self.nb_lignes - valides))
+        return {"source": self.source, "nb_lignes": self.nb_lignes, "colonnes": cols, "avertissements": list(self.avertissements)}
 
     def ecrire_csv(self, chemin):
         with open(chemin, "w", encoding="utf-8", newline="") as f:
@@ -285,6 +347,48 @@ def _lire_xlsx(p, entete):
 
 
 # =============================================================================
+#  Génération de données
+# =============================================================================
+def _entier_borne(valeur, nom, minimum, maximum):
+    try:
+        n = int(str(valeur).strip())
+    except (TypeError, ValueError):
+        raise ErreurStat(f"{nom} : saisir un nombre entier.")
+    if not minimum <= n <= maximum:
+        raise ErreurStat(f"{nom} : la valeur doit être comprise entre {minimum} et {maximum}.")
+    return n
+
+
+def _generateur(graine):
+    if graine is None or str(graine).strip() == "":
+        return random.Random()
+    try:
+        return random.Random(int(str(graine).strip()))
+    except ValueError:
+        raise ErreurStat("La graine doit être un nombre entier (ou rester vide).")
+
+
+def generer_uniforme(n, minimum=0.0, maximum=1.0, decimales=3, graine=None):
+    """n valeurs aléatoires uniformes entre deux bornes ; 'graine' (entier) rend le tirage reproductible."""
+    n = _entier_borne(n, "Nombre de valeurs", 1, MAX_GENERE)
+    dec = _entier_borne(decimales, "Nombre de décimales", 0, 10)
+    if not (math.isfinite(minimum) and math.isfinite(maximum)) or minimum >= maximum:
+        raise ErreurStat("Le minimum doit être strictement inférieur au maximum.")
+    rng = _generateur(graine)
+    return [round(rng.uniform(minimum, maximum), dec) for _ in range(n)]
+
+
+def generer_normale(n, moyenne, ecart_type, decimales=3, graine=None):
+    """n valeurs aléatoires issues d'une loi normale (moyenne, écart-type) ; 'graine' rend le tirage reproductible."""
+    n = _entier_borne(n, "Nombre de valeurs", 1, MAX_GENERE)
+    dec = _entier_borne(decimales, "Nombre de décimales", 0, 10)
+    if not (math.isfinite(moyenne) and math.isfinite(ecart_type)) or ecart_type <= 0:
+        raise ErreurStat("L'écart-type doit être un nombre strictement positif.")
+    rng = _generateur(graine)
+    return [round(rng.gauss(moyenne, ecart_type), dec) for _ in range(n)]
+
+
+# =============================================================================
 #  Mise en forme
 # =============================================================================
 def fmt_nombre(v, chiffres=5):
@@ -360,12 +464,15 @@ class Resultat:
     """Résultat d'une analyse R : titre, lignes de texte, tableaux, figures PNG, remarques."""
 
     def __init__(self, brut, dossier):
+        self.brut = brut                                  # contenu d'origine (conservé pour l'enregistrement du projet)
         self.dossier = Path(dossier)
         self.commande = brut.get("commande", "")
-        self.titre = brut.get("titre", "")
+        self.titre = str(brut.get("titre", ""))
+        self.conclusion = str(brut.get("conclusion") or "")
         self.lignes = [str(x) for x in _liste(brut.get("lignes"))]
         self.avertissements = [str(x) for x in _liste(brut.get("avertissements"))]
-        self.figures = [self.dossier / str(f) for f in _liste(brut.get("figures")) if (self.dossier / str(f)).is_file()]
+        self.figures = [self.dossier / str(f) for f in _liste(brut.get("figures"))
+                        if Path(str(f)).name == str(f) and (self.dossier / str(f)).is_file()]
         self.tables = {}
         tabs = brut.get("tables")
         if isinstance(tabs, dict):
@@ -387,6 +494,15 @@ class Resultat:
         if self.avertissements:
             parts.append("\n".join("Remarque : " + a for a in self.avertissements))
         return "\n\n".join(parts)
+
+    def pour_rapport(self):
+        """Contenu mis en forme pour le rapport PDF (tableaux déjà formatés)."""
+        tables = []
+        for nom, (cols, rows) in self.tables.items():
+            tables.append((libelle(nom), [libelle(c) for c in cols],
+                           [[fmt_cellule(c, v) for c, v in zip(cols, r)] for r in rows]))
+        return {"titre": self.titre, "conclusion": self.conclusion, "lignes": list(self.lignes), "tables": tables,
+                "figures": [str(f) for f in self.figures], "remarques": list(self.avertissements)}
 
     def liberer(self):
         shutil.rmtree(self.dossier, ignore_errors=True)
@@ -464,6 +580,78 @@ def lire_nombre(texte, nom="valeur"):
     return v
 
 
+# =============================================================================
+#  Projet : enregistrement et reprise du travail
+# =============================================================================
+RE_FIGURE_PROJET = re.compile(r"^figures/(\d{1,5})/([A-Za-z0-9_.\-]{1,80}\.png)$")
+LIMITE_JSON_PROJET = 200_000_000
+LIMITE_PNG_PROJET = 30_000_000
+
+
+def enregistrer_projet(chemin, donnees, entrees, meta=None, ui=None):
+    """Écrit un projet (archive zip) : données, résultats complets, graphiques PNG, réglages de l'interface.
+
+    entrees : liste de (onglet, heure_iso, Resultat, inclus_dans_le_rapport)."""
+    projet = {"format": FORMAT_PROJET, "version": VERSION_PROJET,
+              "enregistre": datetime.datetime.now().isoformat(timespec="seconds"),
+              "meta": meta or {}, "ui": ui or {},
+              "donnees": donnees.vers_dict() if donnees is not None else None, "journal": []}
+    fichiers = []
+    for i, (onglet, heure, res, inclus) in enumerate(entrees):
+        for f in res.figures:
+            fichiers.append((f"figures/{i}/{f.name}", f))
+        projet["journal"].append({"onglet": onglet, "heure": heure, "inclus": bool(inclus), "brut": res.brut})
+    chemin = Path(chemin)
+    tmp = chemin.with_name(chemin.name + ".tmp")
+    try:
+        with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr("projet.json", json.dumps(projet, ensure_ascii=False))
+            for nom, f in fichiers:
+                z.write(f, nom)
+        os.replace(tmp, chemin)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+def lire_projet(chemin):
+    """Lit un projet : retourne (meta, donnees ou None, entrees, ui). Le contenu du fichier est contrôlé."""
+    invalide = ErreurStat("Ce fichier n'est pas un projet valide de l'Atelier statistique.")
+    try:
+        z = zipfile.ZipFile(chemin)
+    except (zipfile.BadZipFile, OSError):
+        raise invalide
+    with z:
+        infos = {i.filename: i for i in z.infolist()}
+        if "projet.json" not in infos or infos["projet.json"].file_size > LIMITE_JSON_PROJET or len(infos) > 20_000:
+            raise invalide
+        try:
+            projet = json.loads(z.read("projet.json").decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            raise invalide
+        if not isinstance(projet, dict) or projet.get("format") != FORMAT_PROJET:
+            raise invalide
+        version = projet.get("version")
+        if not isinstance(version, int) or version > VERSION_PROJET:
+            raise ErreurStat("Ce projet a été créé par une version plus récente du programme.")
+        donnees = Donnees.depuis_dict(projet["donnees"]) if projet.get("donnees") else None
+        journal = projet.get("journal")
+        entrees = []
+        for i, e in enumerate(journal if isinstance(journal, list) else []):
+            if not isinstance(e, dict) or not isinstance(e.get("brut"), dict):
+                raise invalide
+            dossier = Path(tempfile.mkdtemp(prefix="stat_"))
+            _dossiers_temp.append(dossier)
+            for nom, info in infos.items():
+                m = RE_FIGURE_PROJET.match(nom)
+                if m and int(m.group(1)) == i and info.file_size <= LIMITE_PNG_PROJET:
+                    (dossier / m.group(2)).write_bytes(z.read(nom))
+            entrees.append((str(e.get("onglet", "")), str(e.get("heure", "")), Resultat(e["brut"], dossier), bool(e.get("inclus", True))))
+    meta = projet.get("meta") if isinstance(projet.get("meta"), dict) else {}
+    ui = projet.get("ui") if isinstance(projet.get("ui"), dict) else {}
+    return meta, donnees, entrees, ui
+
+
 class Etude:
     """Jeu de données courant + analyses. Utilisé par l'interface et par le bot (une instance par utilisateur)."""
 
@@ -486,6 +674,16 @@ class Etude:
     def charger_fichier(self, chemin, **kw):
         self.donnees = lire_fichier(chemin, **kw)
         return self.donnees
+
+    def generer(self, nom, valeurs, remplacer=False):
+        """Ajoute une variable numérique aux données (ou, avec remplacer, repart de zéro).
+        Retourne le nom effectivement utilisé (rendu unique si besoin)."""
+        nom = _nom_propre(nom)
+        if not nom:
+            raise ErreurStat("Donner un nom à la variable.")
+        if remplacer or self.donnees is None:
+            self.donnees = Donnees({}, {}, source="données générées")
+        return self.donnees.ajouter_colonne(nom, valeurs)
 
     def descriptif(self, colonnes=None):
         return self._r("descriptif", {"colonnes": list(colonnes) if colonnes else None})
@@ -533,6 +731,10 @@ Données :
 • Une saisie sans ligne de noms est possible si toutes les valeurs de la première ligne sont numériques.
 • Pour un Kappa avec référence : une ligne par échantillon, une colonne de référence (reconnue automatiquement
   si son nom évoque une référence ou une norme) et une colonne par évaluateur ou par essai.
+• « Générer des données… » crée une variable aléatoire : loi normale (moyenne et écart-type) ou valeurs
+  uniformes entre deux bornes, avec le nombre de valeurs, le nom de la variable, le nombre de décimales
+  et, si on le souhaite, une graine pour retrouver exactement le même tirage. La variable s'ajoute aux
+  données chargées, ou les remplace si on le demande.
 
 Analyses : 
 • Descriptif : effectif, moyenne, médiane, écart-type, variance, quartiles, extrêmes, Shapiro-Wilk.
@@ -550,7 +752,15 @@ Analyses :
     entre eux.
   Interprétation selon l'échelle de Landis et Koch (1977) ; repères AIAG (MSA) pour les systèmes de mesure.
 
-Précautions : 
+Projet et rapport (onglet Rapport) :
+• Chaque analyse calculée est conservée dans le journal de l'onglet Rapport.
+• « Enregistrer le projet » sauvegarde les données, tous les résultats (texte, tableaux, graphiques) et les
+  réglages des onglets dans un fichier .statproj ; « Ouvrir un projet » reprend le travail où il s'était arrêté.
+• « Générer le rapport PDF » produit un rapport de synthèse : titre, auteur, conclusions saisies, synthèse des
+  analyses cochées, description des données, puis le détail de chaque analyse. Nécessite python3-reportlab.
+• Le rapport décrit les données actuellement chargées ; chaque analyse porte sur les données au moment du calcul.
+
+Précautions :
 • Une p-value ne mesure ni l'importance pratique d'un effet ni la probabilité que l'hypothèse soit vraie.
 • Vérifier l'indépendance des observations, la stabilité du procédé et les unités avant toute décision.
 • Les PPM reposent sur une loi normale ajustée : ils sont indicatifs.
@@ -687,13 +897,114 @@ class Visionneuse:
         self.panneau.definir(figures)
 
 
+class DialogueGeneration:
+    """Fenêtre de génération de données aléatoires : loi normale (moyenne, écart-type) ou valeurs uniformes."""
+
+    def __init__(self, app):
+        import tkinter as tk
+        from tkinter import ttk
+        self.app = app
+        self.win = tk.Toplevel(app.root)
+        self.win.title(f"{TITRE} — générer des données")
+        self.win.transient(app.root)
+        self.win.resizable(False, False)
+        cadre = ttk.Frame(self.win, padding=12)
+        cadre.pack(fill="both", expand=True)
+        self.v_loi = tk.StringVar(value="normale")
+        self.v_nom = tk.StringVar(value=app.nom_variable_suivant())
+        self.v_n = tk.StringVar(value="30")
+        self.v_moy, self.v_sd = tk.StringVar(value="0"), tk.StringVar(value="1")
+        self.v_min, self.v_max = tk.StringVar(value="0"), tk.StringVar(value="1")
+        self.v_dec, self.v_graine = tk.StringVar(value="3"), tk.StringVar()
+        self.v_rempl = tk.BooleanVar(value=False)
+        self.v_msg = tk.StringVar()
+
+        ttk.Label(cadre, text="Nom de la variable").grid(row=0, column=0, sticky="e", padx=4, pady=4)
+        ttk.Entry(cadre, textvariable=self.v_nom, width=22).grid(row=0, column=1, columnspan=2, sticky="w", pady=4)
+        ttk.Label(cadre, text="Nombre de valeurs").grid(row=1, column=0, sticky="e", padx=4, pady=4)
+        ttk.Entry(cadre, textvariable=self.v_n, width=10).grid(row=1, column=1, sticky="w", pady=4)
+
+        ttk.Radiobutton(cadre, text="Loi normale", variable=self.v_loi, value="normale", command=self._etat).grid(row=2, column=0, sticky="w", padx=4, pady=(10, 4))
+        ttk.Label(cadre, text="Moyenne").grid(row=2, column=1, sticky="e", padx=(8, 4), pady=(10, 4))
+        self.e_moy = ttk.Entry(cadre, textvariable=self.v_moy, width=10)
+        self.e_moy.grid(row=2, column=2, sticky="w", pady=(10, 4))
+        ttk.Label(cadre, text="Écart-type").grid(row=2, column=3, sticky="e", padx=(8, 4), pady=(10, 4))
+        self.e_sd = ttk.Entry(cadre, textvariable=self.v_sd, width=10)
+        self.e_sd.grid(row=2, column=4, sticky="w", pady=(10, 4))
+
+        ttk.Radiobutton(cadre, text="Valeurs uniformes", variable=self.v_loi, value="uniforme", command=self._etat).grid(row=3, column=0, sticky="w", padx=4, pady=4)
+        ttk.Label(cadre, text="Minimum").grid(row=3, column=1, sticky="e", padx=(8, 4), pady=4)
+        self.e_min = ttk.Entry(cadre, textvariable=self.v_min, width=10)
+        self.e_min.grid(row=3, column=2, sticky="w", pady=4)
+        ttk.Label(cadre, text="Maximum").grid(row=3, column=3, sticky="e", padx=(8, 4), pady=4)
+        self.e_max = ttk.Entry(cadre, textvariable=self.v_max, width=10)
+        self.e_max.grid(row=3, column=4, sticky="w", pady=4)
+
+        ttk.Label(cadre, text="Décimales").grid(row=4, column=0, sticky="e", padx=4, pady=(10, 4))
+        ttk.Entry(cadre, textvariable=self.v_dec, width=6).grid(row=4, column=1, sticky="w", pady=(10, 4))
+        ttk.Label(cadre, text="Graine (facultatif)").grid(row=4, column=2, columnspan=2, sticky="e", padx=(8, 4), pady=(10, 4))
+        ttk.Entry(cadre, textvariable=self.v_graine, width=10).grid(row=4, column=4, sticky="w", pady=(10, 4))
+        ttk.Label(cadre, text="Une même graine redonne exactement le même tirage.", foreground="#666666").grid(row=5, column=0, columnspan=5, sticky="w", padx=4)
+        ttk.Checkbutton(cadre, text="Remplacer les données actuelles (sinon la variable est ajoutée)", variable=self.v_rempl).grid(row=6, column=0, columnspan=5, sticky="w", padx=4, pady=(8, 4))
+
+        barre = ttk.Frame(cadre)
+        barre.grid(row=7, column=0, columnspan=5, sticky="e", pady=(8, 0))
+        ttk.Button(barre, text="Générer", command=self.generer).pack(side="left", padx=4)
+        ttk.Button(barre, text="Fermer", command=self.win.destroy).pack(side="left", padx=4)
+        ttk.Label(cadre, textvariable=self.v_msg, foreground="#1f4e8c", wraplength=440).grid(row=8, column=0, columnspan=5, sticky="w", padx=4, pady=(6, 0))
+        self._etat()
+        self.win.bind("<Escape>", lambda e: self.win.destroy())
+        self.win.bind("<Return>", lambda e: self.generer())
+
+    def _etat(self):
+        normale = self.v_loi.get() == "normale"
+        for e, actif in ((self.e_moy, normale), (self.e_sd, normale), (self.e_min, not normale), (self.e_max, not normale)):
+            e.configure(state="normal" if actif else "disabled")
+
+    @staticmethod
+    def _nombre(texte, nom):
+        v = lire_nombre(texte, nom)
+        if v is None:
+            raise ErreurStat(f"Saisir {nom}.")
+        return v
+
+    def generer(self):
+        from tkinter import messagebox
+        try:
+            if self.v_loi.get() == "normale":
+                valeurs = generer_normale(self.v_n.get(), self._nombre(self.v_moy.get(), "la moyenne"),
+                                          self._nombre(self.v_sd.get(), "l'écart-type"), self.v_dec.get(), self.v_graine.get())
+            else:
+                valeurs = generer_uniforme(self.v_n.get(), self._nombre(self.v_min.get(), "le minimum"),
+                                           self._nombre(self.v_max.get(), "le maximum"), self.v_dec.get(), self.v_graine.get())
+            nom = self.app.etude.generer(self.v_nom.get(), valeurs, remplacer=self.v_rempl.get())
+        except ErreurStat as e:
+            messagebox.showerror(TITRE, str(e), parent=self.win)
+            return
+        self.app.donnees_generees(nom, len(valeurs))
+        self.v_msg.set(f"Variable « {nom} » : {len(valeurs)} valeur(s) ajoutée(s). {self.app.etude.donnees.resume()}")
+        self.v_nom.set(self.app.nom_variable_suivant())
+        self.v_rempl.set(False)
+
+
+class EntreeJournal:
+    """Un résultat conservé dans le journal : onglet d'origine, heure, résultat, inclusion dans le rapport."""
+
+    def __init__(self, onglet, res, heure=None, inclus=True):
+        self.onglet = onglet
+        self.res = res
+        self.inclus = inclus
+        self.heure = heure or datetime.datetime.now().isoformat(timespec="seconds")
+
+
 class ZoneResultat:
     """Zone de résultats : texte à chasse fixe à gauche, graphiques à droite (séparateur déplaçable)."""
 
-    def __init__(self, parent, app):
+    def __init__(self, parent, app, nom=""):
         import tkinter as tk
         from tkinter import ttk, font as tkfont
         self.app = app
+        self.nom = nom                       # nom de l'onglet, pour le journal des résultats
         self.resultat = None
         self.frame = ttk.Frame(parent)
         barre = ttk.Frame(self.frame)
@@ -761,10 +1072,15 @@ class ZoneResultat:
         self.texte.delete("1.0", "end")
         self.texte.configure(state="disabled")
 
+    def reinitialiser(self):
+        """Vide la zone (texte et graphiques) sans supprimer le résultat, qui reste dans le journal."""
+        self.resultat = None
+        self._montrer_graphes(False)
+        self.graphes.definir([])
+        self.vider()
+
     def afficher_erreur(self, message):
-        if self.resultat is not None:
-            self.resultat.liberer()
-            self.resultat = None
+        self.resultat = None
         self._montrer_graphes(False)
         self.graphes.definir([])
         self.vider()
@@ -773,9 +1089,7 @@ class ZoneResultat:
         self.texte.configure(state="disabled")
 
     def afficher(self, res):
-        if self.resultat is not None and self.resultat is not res:
-            self.resultat.liberer()
-        self.resultat = res
+        self.resultat = res                  # les fichiers du résultat précédent restent disponibles pour le journal
         self.vider()
         t = self.texte
         t.configure(state="normal")
@@ -809,6 +1123,12 @@ class ZoneResultat:
         self.app.statut(f"Résultat enregistré : {p.name}" + (" (figures PNG à côté)" if self.resultat.figures else ""))
 
 
+PERMIS_UI = {"sep": ["Automatique", "Tabulation", "Point-virgule", "Virgule", "Espace"],
+             "dec": ["Automatique", "Point", "Virgule"], "ent": ["Automatique", "Oui", "Non"],
+             "talt": ["Différent de", "Supérieur à", "Inférieur à"], "amode": ["large", "long"], "kmode": ["deux", "ref"]}
+COLONNES_UI = ("norm", "tx", "ty", "aval", "agrp", "cs", "ka", "kb", "kref")   # réglages qui désignent une colonne de données
+
+
 class Application:
     def __init__(self, root):
         import tkinter as tk
@@ -818,7 +1138,11 @@ class Application:
         self.etude = Etude()
         self.file = queue.Queue()
         self.occupe = False
-        root.title(f"{TITRE} — JFBConseils")
+        self.journal = []                    # tous les résultats calculés (EntreeJournal), repris dans le projet et le rapport
+        self.projet_chemin = None
+        self.zones_par_nom = {}
+        self._dlg_gen = None
+        self._titre_fenetre()
         sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
         root.geometry(f"{int(sw * 0.96)}x{int(sh * 0.92)}+{int(sw * 0.02)}+0")   # grande fenêtre, adaptée à l'écran
         try:
@@ -849,6 +1173,14 @@ class Application:
                 if item[0] == "statut":
                     self.statut(item[1])
                     continue
+                if item[0] == "erreur":
+                    from tkinter import messagebox
+                    self.statut("Erreur.")
+                    messagebox.showerror(TITRE, item[1])
+                    continue
+                if item[0] == "pdf":
+                    self._pdf_termine(item[1])
+                    continue
                 zone, res, err = item
                 self.occupe = False
                 if err:
@@ -856,6 +1188,7 @@ class Application:
                     self.statut("Erreur.")
                 else:
                     zone.afficher(res)
+                    self._journaliser(zone.nom, res)
                     self.statut("Calcul terminé.")
         except queue.Empty:
             pass
@@ -882,9 +1215,11 @@ class Application:
         threading.Thread(target=tache, daemon=True).start()
 
     def quitter(self):
-        for z in self.zones:
-            if z.resultat is not None:
-                z.resultat.liberer()
+        vus = set()
+        for res in [e.res for e in self.journal] + [z.resultat for z in self.zones]:
+            if res is not None and id(res) not in vus:
+                vus.add(id(res))
+                res.liberer()
         self.root.destroy()
 
     # -- construction -----------------------------------------------------------------
@@ -902,12 +1237,14 @@ class Application:
         self._onglet_anova(nb)
         self._onglet_capabilite(nb)
         self._onglet_kappa(nb)
+        self._onglet_rapport(nb)
         self._onglet_aide(nb)
 
-    def _nouvelle_zone(self, parent):
-        z = ZoneResultat(parent, self)
+    def _nouvelle_zone(self, parent, nom):
+        z = ZoneResultat(parent, self, nom)
         z.frame.pack(fill="both", expand=True, padx=8, pady=(0, 8))
         self.zones.append(z)
+        self.zones_par_nom[nom] = z
         return z
 
     def _onglet(self, nb, titre):
@@ -925,6 +1262,7 @@ class Application:
         ttk.Button(barre, text="Charger la saisie", command=self.charger_saisie).pack(side="left", padx=6)
         ttk.Button(barre, text="Effacer la saisie", command=lambda: self.saisie.delete("1.0", "end")).pack(side="left", padx=6)
         ttk.Button(barre, text="Exporter en CSV…", command=self.exporter_csv).pack(side="left", padx=6)
+        ttk.Button(barre, text="Générer des données…", command=self.generer_donnees).pack(side="left", padx=6)
 
         opt = ttk.LabelFrame(f, text="Lecture")
         opt.pack(fill="x", padx=8)
@@ -1026,6 +1364,320 @@ class Application:
             Path(chemin).write_text(self.etude.donnees.vers_csv_texte(), encoding="utf-8-sig")
             self.statut(f"Données exportées : {Path(chemin).name} (séparateur point-virgule, décimale virgule)")
 
+    # --- Génération de données
+    def nom_variable_suivant(self):
+        d = self.etude.donnees
+        pris = set(d.noms) if d else set()
+        k = 1
+        while f"Serie_{k}" in pris:
+            k += 1
+        return f"Serie_{k}"
+
+    def generer_donnees(self):
+        if self._dlg_gen is not None:
+            try:
+                if self._dlg_gen.win.winfo_exists():
+                    self._dlg_gen.win.lift()
+                    return
+            except Exception:
+                pass
+        self._dlg_gen = DialogueGeneration(self)
+
+    def donnees_generees(self, nom, n):
+        self._remplir_saisie()
+        self._donnees_chargees("données générées")
+        self.statut(f"Variable « {nom} » : {n} valeur(s) générée(s). {self.etude.donnees.resume()}")
+
+    def _remplir_saisie(self):
+        """Affiche les données courantes dans la zone de saisie (si elles tiennent raisonnablement dedans)."""
+        d = self.etude.donnees
+        self.saisie.delete("1.0", "end")
+        if d is not None and d.nb_lignes <= 5000:
+            self.saisie.insert("1.0", d.vers_csv_texte())
+
+    # --- Journal des résultats, projet et rapport
+    def _titre_fenetre(self):
+        nom = f" — {Path(self.projet_chemin).name}" if self.projet_chemin else ""
+        self.root.title(f"{TITRE} — JFBConseils{nom}")
+
+    def _journaliser(self, onglet, res):
+        self.journal.append(EntreeJournal(onglet, res))
+        self._maj_journal()
+
+    def _maj_journal(self):
+        arbre = self.arbre_j
+        arbre.delete(*arbre.get_children())
+        for i, e in enumerate(self.journal):
+            arbre.insert("", "end", iid=str(i), values=("☑" if e.inclus else "☐", e.heure[11:16], e.onglet, e.res.titre))
+        if self.journal:
+            arbre.see(str(len(self.journal) - 1))
+
+    def _clic_journal(self, event):
+        arbre = self.arbre_j
+        if arbre.identify_region(event.x, event.y) != "cell" or arbre.identify_column(event.x) != "#1":
+            return None
+        iid = arbre.identify_row(event.y)
+        if not iid:
+            return None
+        e = self.journal[int(iid)]
+        e.inclus = not e.inclus
+        arbre.set(iid, "inc", "☑" if e.inclus else "☐")
+        return "break"
+
+    def _inclure_tout(self, oui):
+        for e in self.journal:
+            e.inclus = oui
+        self._maj_journal()
+
+    def afficher_du_journal(self):
+        from tkinter import messagebox
+        sel = self.arbre_j.selection()
+        if not sel:
+            messagebox.showinfo(TITRE, "Sélectionner d'abord une analyse dans la liste.")
+            return
+        e = self.journal[int(sel[0])]
+        zone = self.zones_par_nom.get(e.onglet)
+        if zone is None:
+            return
+        zone.afficher(e.res)
+        self.nb.select(zone.frame.master)
+
+    def retirer_du_journal(self):
+        sel = {int(i) for i in self.arbre_j.selection()}
+        if not sel:
+            return
+        self.journal = [e for k, e in enumerate(self.journal) if k not in sel]
+        self._maj_journal()
+
+    def _onglet_rapport(self, nb):
+        tk, ttk = self.tk, self.ttk
+        f = self._onglet(nb, "Rapport")
+        projet = ttk.LabelFrame(f, text="Projet (reprendre le travail plus tard)")
+        projet.pack(fill="x", padx=8, pady=8)
+        ttk.Button(projet, text="Enregistrer le projet…", command=self.enregistrer_projet).pack(side="left", padx=6, pady=6)
+        ttk.Button(projet, text="Ouvrir un projet…", command=self.ouvrir_projet).pack(side="left", padx=6, pady=6)
+        ttk.Label(projet, text="Les données, les résultats (texte, tableaux, graphiques) et les réglages des onglets sont conservés.").pack(side="left", padx=10)
+
+        rap = ttk.LabelFrame(f, text="Rapport de synthèse PDF")
+        rap.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        haut = ttk.Frame(rap)
+        haut.pack(fill="x", padx=6, pady=(6, 2))
+        self.v_rap_titre = tk.StringVar(value=TITRE_RAPPORT)
+        self.v_rap_auteur = tk.StringVar()
+        ttk.Label(haut, text="Titre").grid(row=0, column=0, sticky="e", padx=4, pady=2)
+        ttk.Entry(haut, textvariable=self.v_rap_titre, width=60).grid(row=0, column=1, sticky="w", pady=2)
+        ttk.Label(haut, text="Auteur").grid(row=1, column=0, sticky="e", padx=4, pady=2)
+        ttk.Entry(haut, textvariable=self.v_rap_auteur, width=40).grid(row=1, column=1, sticky="w", pady=2)
+
+        ttk.Label(rap, text="Conclusions et commentaires (repris en tête du rapport)").pack(anchor="w", padx=10, pady=(6, 0))
+        cadre_t = ttk.Frame(rap)
+        cadre_t.pack(fill="x", padx=8, pady=2)
+        self.txt_rap = tk.Text(cadre_t, height=5, wrap="word", undo=True)
+        sy = ttk.Scrollbar(cadre_t, orient="vertical", command=self.txt_rap.yview)
+        self.txt_rap.configure(yscrollcommand=sy.set)
+        sy.pack(side="right", fill="y")
+        self.txt_rap.pack(side="left", fill="x", expand=True)
+
+        ttk.Label(rap, text="Analyses effectuées (cliquer sur la case pour inclure ou non l'analyse dans le rapport)").pack(anchor="w", padx=10, pady=(8, 0))
+        cadre_j = ttk.Frame(rap)
+        cadre_j.pack(fill="both", expand=True, padx=8, pady=2)
+        self.arbre_j = ttk.Treeview(cadre_j, columns=("inc", "heure", "onglet", "titre"), show="headings", selectmode="extended", height=8)
+        for cid, lib, larg, anc in [("inc", "Inclure", 60, "center"), ("heure", "Heure", 60, "center"),
+                                    ("onglet", "Onglet", 110, "w"), ("titre", "Analyse", 600, "w")]:
+            self.arbre_j.heading(cid, text=lib)
+            self.arbre_j.column(cid, width=larg, anchor=anc, stretch=(cid == "titre"))
+        sj = ttk.Scrollbar(cadre_j, orient="vertical", command=self.arbre_j.yview)
+        self.arbre_j.configure(yscrollcommand=sj.set)
+        sj.pack(side="right", fill="y")
+        self.arbre_j.pack(side="left", fill="both", expand=True)
+        self.arbre_j.bind("<Button-1>", self._clic_journal)
+
+        boutons = ttk.Frame(rap)
+        boutons.pack(fill="x", padx=8, pady=(4, 8))
+        ttk.Button(boutons, text="Tout inclure", command=lambda: self._inclure_tout(True)).pack(side="left", padx=(0, 6))
+        ttk.Button(boutons, text="Ne rien inclure", command=lambda: self._inclure_tout(False)).pack(side="left", padx=6)
+        ttk.Button(boutons, text="Afficher dans son onglet", command=self.afficher_du_journal).pack(side="left", padx=6)
+        ttk.Button(boutons, text="Retirer du journal", command=self.retirer_du_journal).pack(side="left", padx=6)
+        ttk.Button(boutons, text="Générer le rapport PDF…", command=self.generer_pdf).pack(side="right")
+
+    def _meta_rapport(self):
+        return {"titre": self.v_rap_titre.get().strip() or TITRE_RAPPORT, "auteur": self.v_rap_auteur.get().strip(),
+                "commentaires": self.txt_rap.get("1.0", "end").strip()}
+
+    def _vars_ui(self):
+        return {"sep": self.v_sep, "dec": self.v_dec, "ent": self.v_ent, "norm": self.v_norm, "tx": self.v_tx, "ty": self.v_ty,
+                "mu": self.v_mu, "talt": self.v_talt, "tapp": self.v_tapp, "tvar": self.v_tvar, "amode": self.v_amode,
+                "aval": self.v_aval, "agrp": self.v_agrp, "cs": self.v_cs, "lsl": self.v_lsl, "cib": self.v_cib,
+                "usl": self.v_usl, "sig": self.v_sig, "kmode": self.v_kmode, "ka": self.v_ka, "kb": self.v_kb, "kref": self.v_kref}
+
+    def _listes_ui(self):
+        return {"desc": self.lb_desc, "anova": self.lb_anova, "kev": self.lb_kev}
+
+    def _etat_ui(self):
+        """Réglages courants des onglets (pour reprendre le travail à l'identique)."""
+        etat = {"v": {k: v.get() for k, v in self._vars_ui().items()},
+                "listes": {k: [lb.get(i) for i in lb.curselection()] for k, lb in self._listes_ui().items()}}
+        try:
+            etat["onglet"] = self.nb.index(self.nb.select())
+        except Exception:
+            pass
+        return etat
+
+    def _appliquer_ui(self, etat):
+        if not isinstance(etat, dict):
+            return
+        vues = etat.get("v") if isinstance(etat.get("v"), dict) else {}
+        d = self.etude.donnees
+        noms = set(d.noms) if d else set()
+        for cle, var in self._vars_ui().items():
+            if cle not in vues:
+                continue
+            val = vues[cle]
+            if isinstance(var, self.tk.BooleanVar):
+                if isinstance(val, bool):
+                    var.set(val)
+            elif isinstance(val, str):
+                if cle in PERMIS_UI and val not in PERMIS_UI[cle]:
+                    continue
+                if cle in COLONNES_UI and val not in noms and not (cle == "ty" and val.startswith("—")):
+                    continue
+                var.set(val)
+        listes = etat.get("listes") if isinstance(etat.get("listes"), dict) else {}
+        for cle, lb in self._listes_ui().items():
+            choisis = listes.get(cle)
+            if not isinstance(choisis, list):
+                continue
+            lb.selection_clear(0, "end")
+            for i, n in enumerate(lb.get(0, "end")):
+                if n in choisis:
+                    lb.selection_set(i)
+        idx, onglets = etat.get("onglet"), self.nb.tabs()
+        if isinstance(idx, int) and not isinstance(idx, bool) and 0 <= idx < len(onglets):
+            self.nb.select(onglets[idx])
+
+    def enregistrer_projet(self):
+        from tkinter import filedialog, messagebox
+        if self.etude.donnees is None and not self.journal:
+            messagebox.showinfo(TITRE, "Rien à enregistrer : aucune donnée ni aucun résultat.")
+            return
+        init = Path(self.projet_chemin) if self.projet_chemin else None
+        chemin = filedialog.asksaveasfilename(
+            title="Enregistrer le projet", defaultextension=EXT_PROJET,
+            filetypes=[("Projet Atelier statistique", f"*{EXT_PROJET}")],
+            initialdir=str(init.parent if init else Path.home()),
+            initialfile=init.name if init else f"projet_{datetime.date.today():%Y%m%d}{EXT_PROJET}")
+        if not chemin:
+            return
+        try:
+            enregistrer_projet(chemin, self.etude.donnees, [(e.onglet, e.heure, e.res, e.inclus) for e in self.journal],
+                               self._meta_rapport(), self._etat_ui())
+        except Exception as e:
+            messagebox.showerror(TITRE, f"Enregistrement impossible : {e}")
+            return
+        self.projet_chemin = chemin
+        self._titre_fenetre()
+        self.statut(f"Projet enregistré : {Path(chemin).name}")
+
+    def ouvrir_projet(self):
+        from tkinter import filedialog, messagebox
+        if (self.etude.donnees is not None or self.journal) and not messagebox.askokcancel(
+                TITRE, "Ouvrir un projet remplace les données et les résultats actuels. Continuer ?"):
+            return
+        chemin = filedialog.askopenfilename(
+            title="Ouvrir un projet", initialdir=str(Path(self.projet_chemin).parent if self.projet_chemin else Path.home()),
+            filetypes=[("Projet Atelier statistique", f"*{EXT_PROJET}"), ("Tous les fichiers", "*.*")])
+        if not chemin:
+            return
+        try:
+            meta, donnees, entrees, ui = lire_projet(chemin)
+        except ErreurStat as e:
+            messagebox.showerror(TITRE, str(e))
+            return
+        except Exception as e:
+            messagebox.showerror(TITRE, f"Lecture impossible : {e}")
+            return
+        self.etude.donnees = donnees
+        self.journal = [EntreeJournal(o, r, h or None, i) for (o, h, r, i) in entrees]
+        for z in self.zones:
+            z.reinitialiser()
+        if donnees is not None:
+            self._remplir_saisie()
+            self._donnees_chargees(f"projet {Path(chemin).name}")
+        else:
+            self.saisie.delete("1.0", "end")
+            self.arbre.delete(*self.arbre.get_children())
+            self.resume_var.set("Aucune donnée chargée.")
+            self._maj_choix()
+        self.v_rap_titre.set(str(meta.get("titre") or TITRE_RAPPORT))
+        self.v_rap_auteur.set(str(meta.get("auteur") or ""))
+        self.txt_rap.delete("1.0", "end")
+        self.txt_rap.insert("1.0", str(meta.get("commentaires") or ""))
+        self._maj_journal()
+        self._appliquer_ui(ui)
+        derniers = {}
+        for e in self.journal:
+            derniers[e.onglet] = e
+        for nom, e in derniers.items():
+            zone = self.zones_par_nom.get(nom)
+            if zone is not None:
+                zone.afficher(e.res)
+        self.projet_chemin = chemin
+        self._titre_fenetre()
+        self.statut(f"Projet ouvert : {Path(chemin).name} — {len(self.journal)} résultat(s) dans le journal.")
+
+    def generer_pdf(self):
+        from tkinter import filedialog, messagebox
+        inclus = [e for e in self.journal if e.inclus]
+        if self.etude.donnees is None and not inclus:
+            messagebox.showinfo(TITRE, "Rien à mettre dans le rapport : charger des données et lancer des analyses.")
+            return
+        if str(DOSSIER) not in sys.path:
+            sys.path.insert(0, str(DOSSIER))
+        try:
+            import rapport_statistique as rs
+        except ImportError:
+            messagebox.showerror(TITRE, "Le fichier rapport_statistique.py est introuvable dans le dossier du programme.")
+            return
+        ok, msg = rs.verifier()
+        if not ok:
+            messagebox.showerror(TITRE, msg)
+            return
+        if not inclus and not messagebox.askyesno(TITRE, "Aucune analyse n'est cochée : le rapport ne contiendra que la description des données. Continuer ?"):
+            return
+        chemin = filedialog.asksaveasfilename(
+            title="Enregistrer le rapport PDF", defaultextension=".pdf", filetypes=[("PDF", "*.pdf")],
+            initialdir=str(Path(self.projet_chemin).parent if self.projet_chemin else Path.home()),
+            initialfile=f"Rapport_{datetime.date.today():%Y%m%d}.pdf")
+        if not chemin:
+            return
+        meta = self._meta_rapport()
+        meta["date"] = datetime.datetime.now().strftime("%d/%m/%Y %H:%M")
+        meta["pied"] = f"{TITRE} — JFBConseils"
+        resume = self.etude.donnees.resume_rapport() if self.etude.donnees is not None else None
+        analyses = []
+        for k, e in enumerate(inclus, 1):
+            a = e.res.pour_rapport()
+            a.update(numero=k, onglet=e.onglet, heure=e.heure[11:16])
+            analyses.append(a)
+        self.statut("Création du rapport PDF…")
+
+        def tache():
+            try:
+                rs.generer_pdf(chemin, meta, resume, analyses, logo=str(ICONE) if ICONE.is_file() else None)
+                self.file.put(("pdf", chemin))
+            except Exception as e:
+                self.file.put(("erreur", f"Rapport impossible : {type(e).__name__} : {e}"))
+        threading.Thread(target=tache, daemon=True).start()
+
+    def _pdf_termine(self, chemin):
+        from tkinter import messagebox
+        self.statut(f"Rapport enregistré : {Path(chemin).name}")
+        if messagebox.askyesno(TITRE, f"Rapport enregistré :\n{chemin}\n\nL'ouvrir maintenant ?"):
+            try:
+                subprocess.Popen(["xdg-open", chemin], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                messagebox.showinfo(TITRE, "Ouverture automatique impossible : ouvrir le PDF depuis le gestionnaire de fichiers.")
+
     # --- Onglets d'analyse
     def _liste_multi(self, parent, hauteur=4):
         tk, ttk = self.tk, self.ttk
@@ -1052,7 +1704,7 @@ class Application:
         b.grid(row=0, column=2, padx=12, sticky="n")
         ttk.Button(b, text="Tout sélectionner", command=lambda: self.lb_desc.select_set(0, "end")).pack(fill="x", pady=2)
         ttk.Button(b, text="Lancer", command=self.run_descriptif).pack(fill="x", pady=2)
-        self.z_desc = self._nouvelle_zone(f)
+        self.z_desc = self._nouvelle_zone(f, "Descriptif")
 
     def run_descriptif(self):
         cols = [self.lb_desc.get(i) for i in self.lb_desc.curselection()] or None
@@ -1068,7 +1720,7 @@ class Application:
         self.cb_norm = self._combo(c, self.v_norm)
         self.cb_norm.pack(side="left")
         ttk.Button(c, text="Lancer", command=self.run_normalite).pack(side="left", padx=12)
-        self.z_norm = self._nouvelle_zone(f)
+        self.z_norm = self._nouvelle_zone(f, "Normalité")
 
     def run_normalite(self):
         col = self.v_norm.get()                      # lecture des variables Tk dans le thread principal
@@ -1098,7 +1750,7 @@ class Application:
         ttk.Checkbutton(c, text="Mesures appariées", variable=self.v_tapp).grid(row=4, column=1, sticky="w", pady=2)
         ttk.Checkbutton(c, text="Variances supposées égales (échantillons indépendants)", variable=self.v_tvar).grid(row=5, column=1, sticky="w", pady=2)
         ttk.Button(c, text="Lancer", command=self.run_t).grid(row=6, column=1, sticky="w", pady=8)
-        self.z_t = self._nouvelle_zone(f)
+        self.z_t = self._nouvelle_zone(f, "Test t")
 
     def run_t(self):
         try:
@@ -1131,7 +1783,7 @@ class Application:
         self.cb_agrp = self._combo(c, self.v_agrp)
         self.cb_agrp.grid(row=4, column=1, sticky="w")
         ttk.Button(c, text="Lancer", command=self.run_anova).grid(row=5, column=1, sticky="w", pady=8)
-        self.z_anova = self._nouvelle_zone(f)
+        self.z_anova = self._nouvelle_zone(f, "ANOVA")
 
     def run_anova(self):
         if self.v_amode.get() == "large":
@@ -1158,7 +1810,7 @@ class Application:
             ttk.Entry(c, textvariable=var, width=16).grid(row=i, column=1, sticky="w")
         ttk.Label(c, text="Laisser vide une limite absente. Sans écart-type intra-sous-groupe, seuls Pp et Ppk sont calculés.").grid(row=5, column=0, columnspan=3, sticky="w", padx=4, pady=3)
         ttk.Button(c, text="Calculer", command=self.run_cap).grid(row=6, column=1, sticky="w", pady=8)
-        self.z_cap = self._nouvelle_zone(f)
+        self.z_cap = self._nouvelle_zone(f, "Capabilité")
 
     def run_cap(self):
         try:
@@ -1196,7 +1848,7 @@ class Application:
         ttk.Label(c, text="Une ligne par échantillon : une colonne pour la référence (valeur reconnue) et une colonne par évaluateur (ou par essai).\n"
                           "Kappa > 0,75 : satisfaisant ; de 0,40 à 0,75 : à améliorer ; < 0,40 : insuffisant (repères AIAG).").grid(row=5, column=2, sticky="w", padx=12)
         ttk.Button(c, text="Calculer", command=self.run_kappa).grid(row=6, column=1, sticky="w", pady=8)
-        self.z_kappa = self._nouvelle_zone(f)
+        self.z_kappa = self._nouvelle_zone(f, "Kappa")
 
     def run_kappa(self):
         if self.v_kmode.get() == "ref":

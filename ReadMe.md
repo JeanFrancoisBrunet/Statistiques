@@ -20,6 +20,7 @@ Programme de statistiques du Pi 5, utilisable de 4 façons : application de bure
 |---                             |---                                                                                                                                                 |
 | `statistiques.py`              | Application de bureau (Tkinter) avec écran d'accueil ; contient aussi le cœur partagé avec le bot (lecture des données, appel de R, mise en forme) |
 | `telegram_bot_statistiques.py` | Bot Telegram (dans le dossier du bot)                                                                                                              |
+| `rapport_statistique.py`       | Rapport de synthèse PDF (reportlab), appelé par l'application de bureau                                                                            |
 | `cli_statistique.R`            | Passerelle en ligne de commande vers le moteur R (résultats JSON + graphiques PNG)                                                                 |
 | `moteur_statistique.R`         | Fonctions de calcul R réutilisables                                                                                                                |
 | `app.R`                        | Interface web Shiny, facultative (voir plus bas)                                                                                                   |
@@ -35,6 +36,9 @@ Programme de statistiques du Pi 5, utilisable de 4 façons : application de bure
 - **ANOVA à un facteur** : colonnes = groupes ou format long (colonne de mesures + colonne de groupes) ; contrôle des résidus (Shapiro-Wilk) et de l'homogénéité des variances (Fligner-Killeen) ; comparaisons deux à deux de Tukey si le test global est significatif.
 - **Capabilité** : Pp/Ppk à partir de l'écart-type global ; Cp/Cpk/Cm/Cmk uniquement si un écart-type intra-sous-groupe est fourni ; PPM estimés ; histogramme avec limites de spécification.
 - **Kappa de Cohen** non pondéré, avec matrice de confusion, en deux modes : comparaison de deux évaluations, ou comparaison d'un ou plusieurs évaluateurs à une **colonne de référence (norme)** (application de bureau). Dans ce second mode : Kappa de chaque évaluateur contre la référence avec un verdict (satisfaisant, à améliorer, insuffisant), accord en % et intervalle de confiance, accord de tous les évaluateurs avec la référence, Kappa des évaluateurs deux à deux et graphique. Interprétation selon l'échelle de Landis et Koch (1977) ; repères AIAG (MSA) pour les systèmes de mesure : Kappa > 0,75 bon à excellent, Kappa < 0,40 insuffisant. Les références sont rappelées avec chaque résultat.
+- **Génération de données** (bouton « Générer des données… » de l'onglet Données) : variable aléatoire selon une loi normale (moyenne, écart-type) ou des valeurs uniformes (minimum, maximum), avec le nombre de valeurs, le nom de la variable, le nombre de décimales et une graine facultative pour retrouver le même tirage. La variable s'ajoute aux données chargées ou les remplace ; on peut en générer plusieurs à la suite.
+- **Projet** (onglet Rapport) : journal de toutes les analyses calculées ; enregistrement des données, des résultats (texte, tableaux, graphiques) et des réglages des onglets dans un fichier `.statproj`, pour reprendre le travail plus tard.
+- **Rapport de synthèse PDF** (onglet Rapport) : titre, auteur, conclusions saisies, synthèse des analyses retenues (case à cocher dans le journal), description des données, puis détail de chaque analyse avec tableaux, graphiques et remarques.
 
 ## Installation sur le Pi
 
@@ -48,6 +52,14 @@ Recommandé, pour un affichage optimal des graphiques dans l'application de bure
 ```bash
 sudo apt install -y python3-pil.imagetk
 ```
+
+Pour le rapport de synthèse PDF :
+
+```bash
+sudo apt install -y python3-reportlab
+```
+
+La police DejaVu (paquet `fonts-dejavu-core`) est utilisée si elle est présente, ce qui est le cas par défaut sur Raspberry Pi OS ; sinon le rapport emploie les polices standard du PDF.
 
 Facultatif, pour lire les fichiers `.xlsx` :
 
@@ -82,7 +94,7 @@ Categories=Education;Science;
 
 Selon le gestionnaire de fichiers, un clic droit sur l'icône puis « Autoriser le lancement » peut être nécessaire la première fois.
 
-Utilisation : onglet **Données** pour saisir/coller des données ou ouvrir un fichier, puis un onglet par analyse. La fenêtre s'ouvre agrandie ; le séparateur entre le texte des résultats et les graphiques se déplace à la souris, et un clic sur un graphique l'ouvre en grand. Chaque résultat peut être enregistré (texte, avec les graphiques PNG à côté). Les options de lecture (séparateur, décimale, ligne de noms de colonnes) sont en mode automatique par défaut et peuvent être forcées.
+Utilisation : onglet **Données** pour saisir/coller des données ou ouvrir un fichier, puis un onglet par analyse. La fenêtre s'ouvre agrandie ; le séparateur entre le texte des résultats et les graphiques se déplace à la souris, et un clic sur un graphique l'ouvre en grand. Chaque résultat peut être enregistré (texte, avec les graphiques PNG à côté). Les options de lecture (séparateur, décimale, ligne de noms de colonnes) sont en mode automatique par défaut et peuvent être forcées. L'onglet **Rapport** garde le journal des analyses, enregistre ou rouvre un projet et génère le rapport PDF ; il décrit les données actuellement chargées, chaque analyse portant sur les données au moment de son calcul.
 
 Les fichiers `.R` sont appelés par `Rscript` : ils n'ont pas besoin du droit d'exécution (`chmod +x`), contrairement aux `.py` lancés directement.
 
@@ -242,4 +254,4 @@ L'application n'a pas d'authentification : l'arrêter avec `statweb_stop` quand 
 
 ## Limites de cette version
 
-Pas de gestion de comptes, pas de rapports PDF, pas de cartes de contrôle, pas de tests non paramétriques, pas d'étude R&R complète, ANOVA à un seul facteur. Les versions Python (bureau et bot) n'enregistrent pas de projets : seules les données et résultats exportés sont conservés, à la demande.
+Pas de gestion de comptes, pas de cartes de contrôle, pas de tests non paramétriques, pas d'étude R&R complète, ANOVA à un seul facteur. Les projets (`.statproj`), la génération de données et le rapport PDF sont propres à l'application de bureau : le bot Telegram ne conserve rien sur disque et l'interface Shiny a sa propre base SQLite.

@@ -118,8 +118,13 @@ cmd_descriptif <- function(d, p) {
   invisible(dev.off())
 
   tab_aff <- tab[, setdiff(names(tab), "Interpretation_normalite"), drop = FALSE]
-  notes <- unique(tab$Interpretation_normalite)
+  pn <- tab$P_Shapiro_Wilk
+  rej <- tab$Serie[!is.na(pn) & pn < 0.05]
+  nrej <- tab$Serie[!is.na(pn) & pn >= 0.05]
   list(titre = "Statistiques descriptives",
+       conclusion = paste0(k, " série(s) décrite(s).",
+                           if (length(rej)) paste0(" Normalité rejetée au seuil de 5 % : ", paste(rej, collapse = ", "), ".") else "",
+                           if (length(nrej)) paste0(" Normalité non rejetée : ", paste(nrej, collapse = ", "), ".") else ""),
        lignes = c(sprintf("%d série(s) numérique(s) analysée(s).", k),
                   paste0(tab$Serie, " — Shapiro-Wilk : ", tab$Interpretation_normalite)),
        tables = list(Descriptif = tab_aff), figures = c(fig1, fig2),
@@ -149,6 +154,7 @@ cmd_normalite <- function(d, p) {
   list(titre = paste("Test de normalité de Shapiro-Wilk —", nom),
        lignes = c(sprintf("Effectif : %d", n), sprintf("Statistique W : %s", fmt(W)),
                   sprintf("p-value : %s", fmt_p(pv)), concl),
+       conclusion = sprintf("« %s » — p-value %s. %s", nom, fmt_p(pv), concl),
        tables = list(), figures = c(fig),
        avertissements = if (!is.na(pv) && pv < 0.05)
          list("Un rejet peut venir d'un petit écart sans importance pratique, surtout avec un grand effectif : examiner aussi le graphique.")
@@ -208,6 +214,7 @@ cmd_t <- function(d, p) {
                   sprintf("p-value : %s", fmt_p(res$p_value)),
                   sprintf("Intervalle de confiance à 95 %% : [%s ; %s]", fmt(ic[1]), fmt(ic[2])),
                   sprintf("Taille d'effet (d de Cohen) : %s", fmt(d_c, 4)), res$conclusion_5pct),
+       conclusion = sprintf("%s (p-value %s ; d de Cohen %s).", sub("\\.$", "", res$conclusion_5pct), fmt_p(res$p_value), fmt(d_c, 3)),
        tables = list(Series = tab), figures = c(fig), avertissements = avert)
 }
 
@@ -269,7 +276,12 @@ cmd_anova <- function(d, p) {
   boxplot(valeur ~ groupe, data = dd, main = "Mesures par groupe", xlab = "Groupe", ylab = "Mesure", col = "#cfe0f5", las = if (nl > 6) 2 else 1)
   points(seq_len(nl), moy$Moyenne, pch = 18, cex = 1.6, col = "#b03030")
   invisible(dev.off())
-  list(titre = "ANOVA à un facteur", lignes = lignes, tables = tables, figures = c(fig), avertissements = avert)
+  list(titre = "ANOVA à un facteur", lignes = lignes,
+       conclusion = sprintf("F = %s, p-value %s. %s", fmt(tab[["F value"]][1], 4), fmt_p(pv),
+                            if (is.na(pv)) "Résultat non calculable."
+                            else if (pv < 0.05) "Au moins une moyenne de groupe diffère statistiquement (seuil 5 %)."
+                            else "Aucune différence de moyenne n'est mise en évidence au seuil de 5 %."),
+       tables = tables, figures = c(fig), avertissements = avert)
 }
 
 cmd_capabilite <- function(d, p) {
@@ -305,7 +317,10 @@ cmd_capabilite <- function(d, p) {
          sprintf("Pp = %s — Ppk = %s", fmt(g("Pp"), 4), fmt(g("Ppk"), 4)))
   if (!is.na(sw) && sw > 0) l <- c(l, sprintf("Cp = %s — Cpk = %s — Cm = %s — Cmk = %s", fmt(g("Cp"), 4), fmt(g("Cpk"), 4), fmt(g("Cm"), 4), fmt(g("Cmk"), 4)))
   l <- c(l, sprintf("PPM estimés sous LSL : %s — au-dessus de USL : %s", fmt(g("PPM_estimes_sous_LSL"), 5), fmt(g("PPM_estimes_sur_USL"), 5)))
-  list(titre = paste("Capabilité —", nom), lignes = l, tables = list(Indicateurs = longue), figures = c(fig), avertissements = avert)
+  concl_c <- paste(c(sprintf("Pp = %s ; Ppk = %s", fmt(g("Pp"), 3), fmt(g("Ppk"), 3)),
+                     if (!is.na(sw) && sw > 0) sprintf("Cp = %s ; Cpk = %s", fmt(g("Cp"), 3), fmt(g("Cpk"), 3))), collapse = " — ")
+  list(titre = paste("Capabilité —", nom), lignes = l, conclusion = concl_c,
+       tables = list(Indicateurs = longue), figures = c(fig), avertissements = avert)
 }
 
 ch_cat <- function(v) {
@@ -392,7 +407,10 @@ cmd_kappa_reference <- function(d, p) {
                 "La valeur du Kappa dépend de la prévalence des catégories : examiner aussi l'accord observé et les matrices de confusion.")
   if (min(tab$Paires) < 30) avert <- c(avert, list("Moins de 30 échantillons : les intervalles de confiance de l'accord sont larges, interpréter avec prudence."))
   list(titre = sprintf("Évaluateurs et référence (norme) — Kappa de Cohen — « %s »", rn),
-       lignes = lignes, tables = tables, figures = c(fig), avertissements = avert)
+       lignes = lignes,
+       conclusion = sprintf("Satisfaisants : %s ; à améliorer : %s ; insuffisants : %s.",
+                            grp("Satisfaisant"), grp("À améliorer"), grp("Insuffisant")),
+       tables = tables, figures = c(fig), avertissements = avert)
 }
 
 cmd_kappa <- function(d, p) {
@@ -407,6 +425,7 @@ cmd_kappa <- function(d, p) {
                   sprintf("Accord observé : %s %%", fmt(round(r$accord_observe * 100, 2), 5)),
                   sprintf("Accord attendu par hasard : %s %%", fmt(round(r$accord_attendu * 100, 2), 5)),
                   sprintf("Kappa : %s", fmt(r$kappa_cohen, 4)), r$interpretation, "", r$reference),
+       conclusion = sprintf("Kappa = %s — %s", fmt(r$kappa_cohen, 4), r$interpretation),
        tables = list(Matrice_de_confusion = m), figures = character(0),
        avertissements = list(r$note, "La valeur du Kappa dépend de la prévalence des catégories : examiner aussi la matrice et l'accord observé."))
 }
