@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # =============================================================================
-#  rapport_statistique.py — rapport de synthèse PDF de l'Atelier statistique
+#  rapport_statistique.py — rapport de synthèse PDF de Statistiques
 #  Utilisé par statistiques.py (onglet « Rapport »).
 #  Contenu du rapport : titre, auteur, date ; conclusions saisies ; synthèse des analyses ;
 #  description des données ; détail de chaque analyse (résultats, tableaux, graphiques, remarques).

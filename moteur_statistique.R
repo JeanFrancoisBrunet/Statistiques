@@ -12,7 +12,11 @@ verifier_numerique <- function(x, nom = "x", minimum = 1L) {
   x
 }
 
-resume_serie <- function(x, nom = "Série") {
+# Écritures du risque alpha : « 5 % » et « 0,05 » (virgule décimale)
+pct_txt <- function(a) paste0(sub(".", ",", format(round(100 * a, 4), scientific = FALSE, trim = TRUE), fixed = TRUE), " %")
+alpha_dec <- function(a) sub(".", ",", format(a, scientific = FALSE, trim = TRUE), fixed = TRUE)
+
+resume_serie <- function(x, nom = "Série", alpha = 0.05) {
   x <- verifier_numerique(x, nom, 1L)
   n <- length(x)
   sdv <- if (n >= 2) stats::sd(x) else NA_real_
@@ -21,10 +25,10 @@ resume_serie <- function(x, nom = "Série") {
   } else NA_real_
   interpretation <- if (is.na(p_norm)) {
     "Test de Shapiro-Wilk non calculable (n < 3, n > 5000, données constantes ou trop peu de valeurs distinctes)."
-  } else if (p_norm < 0.05) {
-    "La normalité est rejetée au seuil de 5 %."
+  } else if (p_norm < alpha) {
+    sprintf("p-value < α (%s) : H0 rejetée, la normalité est rejetée.", alpha_dec(alpha))
   } else {
-    "La normalité n'est pas rejetée au seuil de 5 %."
+    sprintf("p-value ≥ α (%s) : H0 non rejetée, la normalité est retenue.", alpha_dec(alpha))
   }
   data.frame(
     Serie = nom, n = n, Moyenne = mean(x), Mediane = stats::median(x),
@@ -36,19 +40,19 @@ resume_serie <- function(x, nom = "Série") {
   )
 }
 
-resume_multi_series <- function(donnees) {
+resume_multi_series <- function(donnees, alpha = 0.05) {
   if (is.data.frame(donnees)) {
     colonnes <- names(donnees)[vapply(donnees, is.numeric, logical(1))]
     if (!length(colonnes)) stop("Aucune colonne numérique trouvée.", call. = FALSE)
-    do.call(rbind, lapply(colonnes, function(nm) resume_serie(donnees[[nm]], nm)))
+    do.call(rbind, lapply(colonnes, function(nm) resume_serie(donnees[[nm]], nm, alpha)))
   } else if (is.list(donnees)) {
     do.call(rbind, lapply(names(donnees) %||% paste0("Série_", seq_along(donnees)),
-                          function(nm) resume_serie(donnees[[nm]], nm)))
+                          function(nm) resume_serie(donnees[[nm]], nm, alpha)))
   } else stop("Fournir un data.frame ou une liste de séries numériques.", call. = FALSE)
 }
 
 test_t <- function(x, y = NULL, mu = 0, paired = FALSE, alternative = "two.sided",
-                   var_equal = FALSE, conf_level = 0.95) {
+                   var_equal = FALSE, conf_level = 0.95, alpha = 1 - conf_level) {
   if (!alternative %in% c("two.sided", "less", "greater")) stop("Alternative invalide.", call. = FALSE)
   if (!is.null(y) && paired) {
     # Appariement : on retire les PAIRES incomplètes (et non les valeurs séparément, ce qui désalignerait les paires).
@@ -62,22 +66,22 @@ test_t <- function(x, y = NULL, mu = 0, paired = FALSE, alternative = "two.sided
   }
   if (is.null(y)) {
     res <- stats::t.test(x, mu = mu, alternative = alternative, conf.level = conf_level)
-    type <- "t à un échantillon"
+    type <- "t de Student à un échantillon"
   } else {
     if (!paired) y <- verifier_numerique(y, "y", 2L)
     res <- stats::t.test(x, y, paired = paired, var.equal = var_equal,
                          alternative = alternative, conf.level = conf_level)
-    type <- if (paired) "t apparié" else if (var_equal) "t indépendant (variances supposées égales)" else "t indépendant de Welch"
+    type <- if (paired) "t de Student apparié" else if (var_equal) "t de Student indépendant (variances supposées égales)" else "t indépendant de Welch"
   }
   list(type = type, statistic = unname(res$statistic), ddl = unname(res$parameter),
        p_value = res$p.value, intervalle_confiance = unname(res$conf.int),
-       estimation = res$estimate, conclusion_5pct = if (res$p.value < 0.05)
-         "Différence statistiquement significative au seuil de 5 %."
-       else "Pas de différence statistiquement significative mise en évidence au seuil de 5 %.",
+       estimation = res$estimate, conclusion_5pct = if (res$p.value < alpha)
+         sprintf("Différence statistiquement significative au seuil de %s.", pct_txt(alpha))
+       else sprintf("Pas de différence statistiquement significative mise en évidence au seuil de %s.", pct_txt(alpha)),
        objet_test = res)
 }
 
-test_anova <- function(donnees, valeur, groupe) {
+test_anova <- function(donnees, valeur, groupe, alpha = 0.05) {
   if (!all(c(valeur, groupe) %in% names(donnees))) stop("Colonnes valeur/groupe introuvables.", call. = FALSE)
   d <- donnees[, c(valeur, groupe), drop = FALSE]
   names(d) <- c("valeur", "groupe")
@@ -88,9 +92,9 @@ test_anova <- function(donnees, valeur, groupe) {
   tab <- summary(fit)[[1]]
   list(table = as.data.frame(tab), modele = fit,
        p_value = tab[["Pr(>F)"]][1],
-       conclusion_5pct = if (tab[["Pr(>F)"]][1] < 0.05)
-         "Au moins une moyenne de groupe diffère statistiquement (ANOVA, seuil 5 %)."
-       else "Aucune différence de moyenne n'est mise en évidence par l'ANOVA au seuil de 5 %.",
+       conclusion_5pct = if (tab[["Pr(>F)"]][1] < alpha)
+         sprintf("Au moins une moyenne de groupe diffère statistiquement (ANOVA, seuil %s).", pct_txt(alpha))
+       else sprintf("Aucune différence de moyenne n'est mise en évidence par l'ANOVA au seuil de %s.", pct_txt(alpha)),
        avertissement = "Vérifier indépendance, normalité approximative des résidus et homogénéité des variances. Une ANOVA significative ne précise pas quels groupes diffèrent.")
 }
 

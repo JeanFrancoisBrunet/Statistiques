@@ -41,12 +41,17 @@ TITRE = "Statistiques"
 MAX_LIGNES = 200_000
 MAX_GENERE = 100_000                     # nombre maximal de valeurs générées en une fois
 EXT_PROJET = ".statproj"                 # fichier de projet (archive zip : données, résultats, graphiques)
-FORMAT_PROJET = "Atelier statistique"
+FORMAT_PROJET = "Statistiques"
 VERSION_PROJET = 1
-TITRE_RAPPORT = "Rapport d'analyse statistique"
+TITRE_RAPPORT = "Rapport d'analyse statistiques"
 
 MANQUANTS = {"", "na", "n/a", "nan", "null", "none"}
 MOTS_REFERENCE = ("ref", "réf", "norme", "standard", "etalon", "étalon", "expert", "vrai")   # noms de colonne de référence
+MOTS_EVALUATEUR = ("evalu", "évalu", "apprais", "operat", "opérat", "juge", "controleur", "contrôleur", "inspect")
+MOTS_REPONSE = ("reponse", "réponse", "resultat", "résultat", "jugement", "decision", "décision", "verdict")
+MOTS_ECHANTILLON = ("piece", "pièce", "echantillon", "échantillon", "sample", "part", "unite", "unité")
+MOTS_ESSAI = ("essai", "trial", "repetition", "répétition", "replic", "réplic")
+
 RE_DEC_VIRGULE = re.compile(r"^[-+]?\d+,\d+$")
 RE_DEC_POINT = re.compile(r"^[-+]?\d+\.\d+$")
 RE_ENTIER = re.compile(r"^[-+]?\d+$")
@@ -75,6 +80,66 @@ def _convertir(texte, dec):
     if math.isnan(v) or math.isinf(v):
         return None, False
     return v, True
+
+
+RE_DATE_ISO = re.compile(r"^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T]+(\d{1,2}):(\d{2})(?::(\d{2}))?(?:[.,]\d+)?)?$")
+RE_DATE_JMA = re.compile(r"^(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{2}|\d{4})(?:[ T]+(\d{1,2})[:h](\d{2})(?::(\d{2}))?)?$")
+RE_DATE_STOCKEE = re.compile(r"^\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2}(?::\d{2})?)?$")
+AUCUN_GROUPE = "— aucun —"
+AUCUN_ORDRE = "— ordre de saisie —"
+PERIODES_DATE = {"Jour": "jour", "Mois": "mois", "Année": "annee"}
+MAX_GROUPES = 30
+
+
+def _analyser_date(texte, jour_d_abord=True):
+    """datetime.datetime ou None : formats AAAA-MM-JJ, JJ/MM/AAAA (ou - ou .), avec heure facultative (hh:mm[:ss])."""
+    t = str(texte).strip()
+    try:
+        m = RE_DATE_ISO.match(t)
+        if m:
+            a, mo, j, h, mi, s = m.groups()
+            return datetime.datetime(int(a), int(mo), int(j), int(h or 0), int(mi or 0), int(s or 0))
+        m = RE_DATE_JMA.match(t)
+        if m:
+            x, y, a, h, mi, s = m.groups()
+            an = int(a) + (0 if len(a) == 4 else (2000 if int(a) < 70 else 1900))
+            j, mo = (int(x), int(y)) if jour_d_abord else (int(y), int(x))
+            return datetime.datetime(an, mo, j, int(h or 0), int(mi or 0), int(s or 0))
+    except ValueError:
+        return None
+    return None
+
+
+def _colonne_date(brut):
+    """Liste de dates ISO (« AAAA-MM-JJ [hh:mm[:ss]] », None si manquante) si toutes les valeurs non vides de la colonne
+    sont des dates ; sinon None. Le jour est lu avant le mois, sauf si cela est impossible pour une valeur au moins."""
+    pleines = [v for v in brut if v.strip().lower() not in MANQUANTS]
+    if not pleines:
+        return None
+    for jour_d_abord in (True, False):
+        dts = [None if v.strip().lower() in MANQUANTS else _analyser_date(v, jour_d_abord) for v in brut]
+        if all(d is not None for v, d in zip(brut, dts) if v.strip().lower() not in MANQUANTS):
+            vus = [d for d in dts if d is not None]
+            heure = any(d.hour or d.minute or d.second for d in vus)
+            sec = any(d.second for d in vus)
+            f = "%Y-%m-%d %H:%M:%S" if sec else ("%Y-%m-%d %H:%M" if heure else "%Y-%m-%d")
+            return [None if d is None else d.strftime(f) for d in dts]
+    return None
+
+
+def date_affichee(iso):
+    """« AAAA-MM-JJ hh:mm » -> « JJ/MM/AAAA hh:mm »."""
+    if not iso or not RE_DATE_STOCKEE.match(str(iso)):
+        return "" if iso is None else str(iso)
+    a, m, j = iso[0:4], iso[5:7], iso[8:10]
+    return f"{j}/{m}/{a}" + (iso[10:] if len(iso) > 10 else "")
+
+
+def _cle_tri(valeur):
+    try:
+        return (0, float(str(valeur).replace(",", ".")), "")
+    except ValueError:
+        return (1, 0.0, str(valeur).casefold())
 
 
 def _decouper(ligne, sep):
@@ -145,12 +210,46 @@ class Donnees:
         return [n for n in self.colonnes if self.types[n] == "txt"]
 
     @property
+    def noms_date(self):
+        return [n for n in self.colonnes if self.types[n] == "date"]
+
+    def groupe_etiquettes(self, colonne, periode=None):
+        """Étiquette de groupe de chaque ligne (None si la case est vide) : texte, nombre ou, pour une date, la période
+        (« jour » AAAA-MM-JJ, « mois » AAAA-MM, « annee » AAAA)."""
+        if colonne not in self.colonnes:
+            raise ErreurStat(f"Colonne de groupes introuvable : « {colonne} ».")
+        t = self.types[colonne]
+        out = []
+        for v in self.colonnes[colonne]:
+            if v is None:
+                out.append(None)
+            elif t == "num":
+                out.append(fmt_nombre(v, 15))
+            elif t == "date":
+                out.append(str(v)[:{"annee": 4, "mois": 7}.get(periode or "jour", 10)])
+            else:
+                out.append(str(v))
+        return out
+
+    def groupe_valeurs(self, colonne, periode=None):
+        """Groupes distincts de la colonne (ordre naturel : nombres puis textes)."""
+        return sorted({e for e in self.groupe_etiquettes(colonne, periode) if e is not None}, key=_cle_tri)
+
+    def avec_groupe(self, colonne, periode=None):
+        """Copie des données avec la colonne technique « __groupe__ » (groupe de chaque ligne) ; l'original n'est pas modifié."""
+        cols = dict(self.colonnes)
+        types = dict(self.types)
+        cols["__groupe__"] = self.groupe_etiquettes(colonne, periode)
+        types["__groupe__"] = "txt"
+        return Donnees(cols, types, self.avertissements, self.source)
+
+    @property
     def nb_lignes(self):
         return max((len(v) for v in self.colonnes.values()), default=0)
 
     def resume(self):
-        num = len(self.noms_num)
-        return f"{self.nb_lignes} ligne(s), {len(self.noms)} colonne(s) dont {num} numérique(s)."
+        num, dat = len(self.noms_num), len(self.noms_date)
+        return f"{self.nb_lignes} ligne(s), {len(self.noms)} colonne(s) dont {num} numérique(s)" + (f" et {dat} de dates." if dat else ".")
 
     def lignes(self, limite=None):
         n = self.nb_lignes if limite is None else min(limite, self.nb_lignes)
@@ -181,8 +280,11 @@ class Donnees:
         colonnes, types = {}, {}
         for nom, vals in d["colonnes"].items():
             t = d["types"].get(nom)
-            if t not in ("num", "txt") or not isinstance(vals, list) or len(vals) > MAX_LIGNES:
+            if t not in ("num", "txt", "date") or not isinstance(vals, list) or len(vals) > MAX_LIGNES:
                 raise invalide
+            if t == "date":
+                if not all(v is None or (isinstance(v, str) and RE_DATE_STOCKEE.match(v)) for v in vals):
+                    raise invalide
             if t == "num":
                 if not all(v is None or (isinstance(v, (int, float)) and not isinstance(v, bool)) for v in vals):
                     raise invalide
@@ -203,7 +305,7 @@ class Donnees:
         cols = []
         for n in self.noms:
             valides = sum(1 for x in self.colonnes[n] if x is not None)
-            cols.append((n, "numérique" if self.types[n] == "num" else "texte", valides, self.nb_lignes - valides))
+            cols.append((n, {"num": "numérique", "date": "date"}.get(self.types[n], "texte"), valides, self.nb_lignes - valides))
         return {"source": self.source, "nb_lignes": self.nb_lignes, "colonnes": cols, "avertissements": list(self.avertissements)}
 
     def ecrire_csv(self, chemin):
@@ -211,13 +313,15 @@ class Donnees:
             w = csv.writer(f)
             w.writerow(self.noms)
             for ligne in self.lignes():
-                w.writerow(["" if v is None else (repr(v) if isinstance(v, float) else v) for v in ligne])
+                w.writerow(["" if v is None else (repr(v) if isinstance(v, float) else v) for v in ligne])      # dates : ISO, lues par R
 
     def vers_csv_texte(self):
         sortie = []
         sortie.append(";".join(self.noms))
+        dates = [self.types[n] == "date" for n in self.noms]
         for ligne in self.lignes():
-            sortie.append(";".join("" if v is None else (fmt_nombre(v, 15) if isinstance(v, float) else str(v)) for v in ligne))
+            sortie.append(";".join("" if v is None else (fmt_nombre(v, 15) if isinstance(v, float) else (date_affichee(v) if dt else str(v)))
+                                   for v, dt in zip(ligne, dates)))
         return "\n".join(sortie) + "\n"
 
 
@@ -276,9 +380,13 @@ def lire_texte(texte, sep="auto", dec="auto", entete="auto"):
         if not non_manquantes:
             avert.append(f"Colonne « {nom} » entièrement vide : ignorée.")
             continue
+        iso = None if all(ok for _, ok in conv) else _colonne_date(brut)
         if all(ok for _, ok in conv):
             colonnes[nom] = [v for v, _ in conv]
             types[nom] = "num"
+        elif iso is not None:
+            colonnes[nom] = iso
+            types[nom] = "date"
         else:
             colonnes[nom] = [None if v.strip().lower() in MANQUANTS else v for v in brut]
             types[nom] = "txt"
@@ -365,11 +473,11 @@ def _generateur(graine):
     try:
         return random.Random(int(str(graine).strip()))
     except ValueError:
-        raise ErreurStat("La graine doit être un nombre entier (ou rester vide).")
+        raise ErreurStat("La valeur d'initialisation doit être un nombre entier (ou rester vide).")
 
 
 def generer_uniforme(n, minimum=0.0, maximum=1.0, decimales=3, graine=None):
-    """n valeurs aléatoires uniformes entre deux bornes ; 'graine' (entier) rend le tirage reproductible."""
+    """n valeurs aléatoires uniformes entre deux bornes ; 'valeur init.' (valeur d'initialisation, entier) rend le tirage reproductible."""
     n = _entier_borne(n, "Nombre de valeurs", 1, MAX_GENERE)
     dec = _entier_borne(decimales, "Nombre de décimales", 0, 10)
     if not (math.isfinite(minimum) and math.isfinite(maximum)) or minimum >= maximum:
@@ -379,7 +487,7 @@ def generer_uniforme(n, minimum=0.0, maximum=1.0, decimales=3, graine=None):
 
 
 def generer_normale(n, moyenne, ecart_type, decimales=3, graine=None):
-    """n valeurs aléatoires issues d'une loi normale (moyenne, écart-type) ; 'graine' rend le tirage reproductible."""
+    """n valeurs aléatoires issues d'une loi normale (moyenne, écart-type) ; 'la valeur init. ou graine' rend le tirage reproductible."""
     n = _entier_borne(n, "Nombre de valeurs", 1, MAX_GENERE)
     dec = _entier_borne(decimales, "Nombre de décimales", 0, 10)
     if not (math.isfinite(moyenne) and math.isfinite(ecart_type)) or ecart_type <= 0:
@@ -415,7 +523,12 @@ LIBELLES = {"Serie": "Série", "Mediane": "Médiane", "Ecart_type": "Écart-type
             "Evaluateur": "Évaluateur", "Evaluateur_1": "Évaluateur 1", "Evaluateur_2": "Évaluateur 2",
             "Accord_pct": "Accord (%)", "IC_inf": "IC 95 % inf. (%)", "IC_sup": "IC 95 % sup. (%)",
             "Evaluateurs_vs_reference": "Évaluateurs / référence (norme)",
-            "Evaluateurs_entre_eux": "Évaluateurs entre eux (Kappa deux à deux)"}
+            "Evaluateurs_entre_eux": "Évaluateurs entre eux (Kappa deux à deux)",
+            "Decision": "Décision", "Sous_groupe": "Sous-groupe", "LIC": "LIC", "LC": "LC", "LSC": "LSC", "Modalite": "Modalité", "Observe": "Observé",
+            "Theorique": "Théorique", "Proportion_attendue_pct": "Proportion attendue (%)", "Residu_standardise": "Résidu standardisé",
+            "Contribution": "Contribution au khi²", "Statistique": "Statistique",
+            "Composante_variance": "Composante de variance", "Contribution_pct": "Contribution (%)", "Variation_etude": "Variation d'étude",
+            "Pct_variation_etude": "% variation d'étude", "Pct_tolerance": "% tolérance"}
 
 
 def libelle(c):
@@ -432,7 +545,7 @@ def fmt_cellule(nom, v):
     return fmt_nombre(v)
 
 
-def table_texte(cols, rows, mode="large"):
+def table_texte(cols, rows, mode="large", libre=False):
     """Tableau en texte à chasse fixe (mode 'large') ou en fiches « Colonne : valeur » (mode 'fiche')."""
     cellules = [[fmt_cellule(c, v) for c, v in zip(cols, r)] for r in rows]
     if mode == "fiche" and list(cols) == ["Indicateur", "Valeur"]:
@@ -440,9 +553,9 @@ def table_texte(cols, rows, mode="large"):
     if mode == "fiche":
         blocs = []
         for r in cellules:
-            blocs.append("\n".join(f"  {libelle(c)} : {v}" for c, v in zip(cols, r)))
+            blocs.append("\n".join(f"  {c if libre else libelle(c)} : {v}" for c, v in zip(cols, r)))
         return "\n\n".join(blocs)
-    ent = [libelle(c) for c in cols]
+    ent = [str(c) if libre else libelle(c) for c in cols]
     larg = [max(len(ent[i]), *(len(r[i]) for r in cellules)) if cellules else len(ent[i]) for i in range(len(cols))]
     def ligne(vals):
         return "  ".join(v.ljust(larg[i]) if i == 0 else v.rjust(larg[i]) for i, v in enumerate(vals))
@@ -474,6 +587,7 @@ class Resultat:
         self.figures = [self.dossier / str(f) for f in _liste(brut.get("figures"))
                         if Path(str(f)).name == str(f) and (self.dossier / str(f)).is_file()]
         self.tables = {}
+        self.libres = {str(x) for x in _liste(brut.get("tables_libres"))}   # tableaux dont les en-têtes sont des données (à ne pas « traduire »)
         tabs = brut.get("tables")
         if isinstance(tabs, dict):
             for nom, t in tabs.items():
@@ -490,7 +604,7 @@ class Resultat:
         if self.lignes:
             parts.append("\n".join(self.lignes))
         for nom, (cols, rows) in self.tables.items():
-            parts.append(libelle(nom) + "\n" + table_texte(cols, rows, mode))
+            parts.append(libelle(nom) + "\n" + table_texte(cols, rows, mode, libre=nom in self.libres))
         if self.avertissements:
             parts.append("\n".join("Remarque : " + a for a in self.avertissements))
         return "\n\n".join(parts)
@@ -499,7 +613,7 @@ class Resultat:
         """Contenu mis en forme pour le rapport PDF (tableaux déjà formatés)."""
         tables = []
         for nom, (cols, rows) in self.tables.items():
-            tables.append((libelle(nom), [libelle(c) for c in cols],
+            tables.append((libelle(nom), [str(c) if nom in self.libres else libelle(c) for c in cols],
                            [[fmt_cellule(c, v) for c, v in zip(cols, r)] for r in rows]))
         return {"titre": self.titre, "conclusion": self.conclusion, "lignes": list(self.lignes), "tables": tables,
                 "figures": [str(f) for f in self.figures], "remarques": list(self.avertissements)}
@@ -525,8 +639,8 @@ def verifier_r():
     rs = shutil.which("Rscript")
     if not rs:
         return False, "R est introuvable. Installer : sudo apt install -y r-base r-cran-jsonlite"
-    if not SCRIPT_R.is_file() or not (DOSSIER / "moteur_statistique.R").is_file():
-        return False, "cli_statistique.R ou moteur_statistique.R manquant dans le dossier du programme."
+    if not SCRIPT_R.is_file() or not (DOSSIER / "moteur_statistique.R").is_file() or not (DOSSIER / "commandes_avancees.R").is_file():
+        return False, "cli_statistique.R, moteur_statistique.R ou commandes_avancees.R manquant dans le dossier du programme."
     try:
         r = subprocess.run([rs, "-e", "library(jsonlite)"], capture_output=True, text=True, timeout=60)
     except Exception as e:
@@ -536,7 +650,15 @@ def verifier_r():
     return True, "R prêt."
 
 
-def executer_r(donnees, commande, params, timeout=180):
+def executer_r(donnees, commande, params, timeout=180, groupe=None):
+    """groupe : None ou {"colonne", "periode", "valeurs"} -> l'analyse est lancée une fois par groupe retenu (réunies en un résultat)."""
+    if groupe:
+        if not groupe.get("valeurs"):
+            raise ErreurStat("Aucun groupe sélectionné : choisir au moins un groupe, ou « — aucun — » pour analyser l'ensemble des données.")
+        nom = groupe["colonne"] + ({"jour": " (par jour)", "mois": " (par mois)", "annee": " (par année)"}.get(groupe.get("periode") or "", "")
+                                   if donnees.types.get(groupe["colonne"]) == "date" else "")
+        params = {**params, "groupes": list(groupe["valeurs"]), "groupe_nom": nom}
+        donnees = donnees.avec_groupe(groupe["colonne"], groupe.get("periode"))
     rs = shutil.which("Rscript")
     if not rs:
         raise ErreurStat("R est introuvable. Installer : sudo apt install -y r-base r-cran-jsonlite")
@@ -580,6 +702,22 @@ def lire_nombre(texte, nom="valeur"):
     return v
 
 
+def lire_alpha(texte):
+    """Risque alpha saisi (0,05 ou 5 % ; virgule ou point) : doit être strictement compris entre 0 et 0,5."""
+    t = str(texte or "").strip()
+    pct = t.endswith("%")
+    v = lire_nombre(t.rstrip("%").strip(), "le risque α")
+    if v is None:
+        raise ErreurStat("Saisir le risque α (par exemple 0,05).")
+    if pct:
+        v /= 100
+    elif v >= 1:
+        v /= 100                                  # « 5 » est lu comme 5 %
+    if not (0 < v < 0.5):
+        raise ErreurStat("Le risque α doit être compris entre 0 et 0,5 (par exemple 0,05 ou 5 %).")
+    return v
+
+
 # =============================================================================
 #  Projet : enregistrement et reprise du travail
 # =============================================================================
@@ -616,7 +754,7 @@ def enregistrer_projet(chemin, donnees, entrees, meta=None, ui=None):
 
 def lire_projet(chemin):
     """Lit un projet : retourne (meta, donnees ou None, entrees, ui). Le contenu du fichier est contrôlé."""
-    invalide = ErreurStat("Ce fichier n'est pas un projet valide de l'Atelier statistique.")
+    invalide = ErreurStat("Ce fichier n'est pas un projet valide du Prog. Statistiques.")
     try:
         z = zipfile.ZipFile(chemin)
     except (zipfile.BadZipFile, OSError):
@@ -658,9 +796,11 @@ class Etude:
     def __init__(self):
         self.donnees = None
         self.echelle = 1.0                     # taille des graphiques R (1 = 900 px de large) ; réglée par l'interface
+        self.groupe = None                     # analyse par groupe : {"colonne", "periode", "valeurs"} ; réglé par l'interface
+        self.alpha = 0.05                      # risque alpha des tests (décision : p-value < alpha → H0 rejetée) ; réglé par l'interface
 
     def _r(self, commande, params):
-        return executer_r(self._d(), commande, {**params, "echelle": self.echelle})
+        return executer_r(self._d(), commande, {**params, "echelle": self.echelle, "alpha_test": self.alpha}, groupe=self.groupe)
 
     def _d(self):
         if self.donnees is None:
@@ -688,8 +828,16 @@ class Etude:
     def descriptif(self, colonnes=None):
         return self._r("descriptif", {"colonnes": list(colonnes) if colonnes else None})
 
-    def normalite(self, colonne):
-        return self._r("normalite", {"colonne": colonne})
+    def normalite(self, colonnes, tests=None):
+        """Tests de normalité d'une ou de plusieurs séries (une colonne ou une liste de colonnes) ;
+        tests : liste d'identifiants parmi TESTS_NORMALITE (Shapiro-Wilk par défaut)."""
+        cols = [colonnes] if isinstance(colonnes, str) else list(colonnes or [])
+        if not cols:
+            raise ErreurStat("Choisir au moins une série.")
+        ids = [t for t in (tests or ["sw"]) if t in TESTS_NORMALITE]
+        if not ids:
+            raise ErreurStat("Choisir au moins un test de normalité.")
+        return self._r("normalite", {"colonnes": cols, "tests": ids})
 
     def test_t(self, x, y=None, mu=0.0, apparie=False, variances_egales=False, alternative="two.sided"):
         return self._r("t", {"x": x, "y": y or None, "mu": mu, "apparie": bool(apparie),
@@ -717,6 +865,74 @@ class Etude:
             raise ErreurStat("Sélectionner au moins un évaluateur, différent de la colonne de référence.")
         return self._r("kappa", {"reference": reference, "evaluateurs": evaluateurs})
 
+    def commande(self, nom, params):
+        """Commande R quelconque (analyses avancées : test F, khi², cartes de contrôle, R&R)."""
+        return self._r(nom, params)
+
+    def test_f(self, x, y, alternative="two.sided"):
+        if not x or not y:
+            raise ErreurStat("Choisir les deux séries à comparer.")
+        return self._r("ftest", {"x": x, "y": y, "alternative": alternative})
+
+    def kappa_long(self, reponse, evaluateur, echantillon, essai, reference):
+        """Kappa à partir de données en format long (une ligne par évaluation) : les données sont remises en
+        colonnes (une ligne par échantillon et par essai, une colonne par évaluateur) avant le calcul.
+        Les données chargées ne sont pas modifiées."""
+        d = self._d()
+        for nom, lib in ((reponse, "la colonne des réponses"), (evaluateur, "la colonne des évaluateurs"),
+                         (echantillon, "la colonne des échantillons"), (reference, "la colonne de référence (norme)")):
+            if not nom or nom not in d.colonnes:
+                raise ErreurStat(f"Choisir {lib}.")
+        essai = essai if essai and essai in d.colonnes else None
+        if len({reponse, evaluateur, echantillon, reference, essai or ""} - {""}) < (5 if essai else 4):
+            raise ErreurStat("Les colonnes choisies doivent être toutes différentes.")
+
+        def txt(v):
+            if v is None:
+                return None
+            if isinstance(v, float) and v == int(v):
+                return str(int(v))
+            s = str(v).strip()
+            return s or None
+
+        cles, evals, rep_ev, ref_cle, vus = [], [], {}, {}, set()
+        col = d.colonnes
+        for i in range(d.nb_lignes):
+            def g(c):
+                return txt(col[c][i]) if c and i < len(col[c]) else None
+            ech, ev, rep, ref = g(echantillon), g(evaluateur), g(reponse), g(reference)
+            if ech is None or ev is None:
+                continue
+            cle = (ech, g(essai) or "")
+            if cle not in vus:
+                vus.add(cle)
+                cles.append(cle)
+            if ev not in evals:
+                evals.append(ev)
+            if ref is not None:
+                if ref_cle.get(cle, ref) != ref:
+                    raise ErreurStat(f"La référence de l'échantillon « {ech} » n'est pas toujours la même (« {ref_cle[cle]} » et « {ref} »).")
+                ref_cle[cle] = ref
+            if rep is not None:
+                if (cle, ev) in rep_ev:
+                    raise ErreurStat(f"Plusieurs réponses de l'évaluateur « {ev} » pour l'échantillon « {ech} »"
+                                     + ("." if essai else " : indiquer la colonne des essais."))
+                rep_ev[(cle, ev)] = rep
+        if len(evals) < 1 or not cles:
+            raise ErreurStat("Aucune évaluation exploitable dans les colonnes choisies.")
+        if len(evals) > 50:
+            raise ErreurStat("Trop d'évaluateurs distincts : vérifier la colonne des évaluateurs.")
+        colonnes = {reference: [ref_cle.get(c) for c in cles]}
+        types = {reference: "txt"}
+        for ev in evals:
+            nom = ev if ev not in colonnes else f"Évaluateur {ev}"
+            colonnes[nom] = [rep_ev.get((c, ev)) for c in cles]
+            types[nom] = "txt"
+        large = Donnees(colonnes, types, source="format long")
+        res = executer_r(large, "kappa", {"reference": reference, "evaluateurs": [k for k in colonnes if k != reference],
+                                          "echelle": self.echelle})
+        return res
+
 
 TEXTE_AIDE = """\
 Statistiques — aide
@@ -726,38 +942,61 @@ Données :
 • Pour une analyse par groupes, utiliser une colonne de mesures et une colonne de groupes.
 • Séparateurs reconnus : tabulation, point-virgule, virgule, espace. Décimale : point ou virgule.
 • Les cases vides et les mentions NA sont traitées comme des valeurs manquantes.
-• Fichiers : txt, csv, tsv, dat, xlsx. Les options de lecture permettent de forcer le séparateur,
-  la décimale ou la présence d'une ligne de noms.
+• Fichiers : txt, csv, tsv, dat, xlsx. Les options de lecture permettent de forcer le séparateur, la décimale ou la présence d'une ligne de noms.
 • Une saisie sans ligne de noms est possible si toutes les valeurs de la première ligne sont numériques.
-• Pour un Kappa avec référence : une ligne par échantillon, une colonne de référence (reconnue automatiquement
-  si son nom évoque une référence ou une norme) et une colonne par évaluateur ou par essai.
-• « Générer des données… » crée une variable aléatoire : loi normale (moyenne et écart-type) ou valeurs
-  uniformes entre deux bornes, avec le nombre de valeurs, le nom de la variable, le nombre de décimales
-  et, si on le souhaite, une graine pour retrouver exactement le même tirage. La variable s'ajoute aux
-  données chargées, ou les remplace si on le demande.
+• Pour un Kappa avec référence : soit une ligne par échantillon, une colonne de référence (reconnue automatiquement si son nom évoque une référence ou une norme)
+  et une colonne par évaluateur ou par essai ; soit une ligne par évaluation (colonnes réponse, évaluateur, échantillon, essai, référence : format long, reconnu à ses noms de colonnes).
+• « Générer des données… » crée une variable aléatoire : loi normale (moyenne et écart-type) ou valeurs uniformes entre deux bornes, avec le nombre de valeurs, le nom de la variable, 
+  le nombre de décimales et, si on le souhaite, une valeur d'initialisation pour retrouver exactement le même tirage. La variable s'ajoute aux données chargées, ou les remplace si on le demande.
+
+Dates et groupes :
+• Une colonne dont toutes les valeurs sont des dates (JJ/MM/AAAA, AAAA-MM-JJ, avec ou sans heure hh:mm[:ss] ; les dates d'un fichier xlsx sont reconnues aussi) est de type « date » : elle est affichée « (date) » dans le tableau et traitée comme un repère de temps, non comme un nombre.
+• « Analyser par groupe » (en haut de la fenêtre) : choisir une colonne de groupes (texte, nombre ou date par jour, mois ou année), puis éventuellement « Choisir les groupes… » pour ne garder que certains groupes.
+  Toutes les analyses des onglets (descriptif, normalité, tests, ANOVA, capabilité, cartes, R&R, khi², Kappa en deux colonnes ou avec colonne de référence) sont alors lancées groupe par groupe : un bloc de résultats, des tableaux et des graphiques par groupe (le nom du groupe est inscrit en haut de chaque graphique).
+  « — aucun — » ramène à l'analyse de l'ensemble des données. Un groupe où l'analyse est impossible (trop peu de valeurs, par exemple) est signalé et les autres groupes sont traités. Le Kappa en format long n'est pas découpé par groupe.
+• Cartes de contrôle : « Ordre des données » classe les points par date (ou par numéro d'ordre) et l'utilise comme étiquette de l'axe ; une colonne de dates est proposée par défaut quand elle existe.
+
+Décision statistique :
+• Le risque α (en haut de la fenêtre, 0,05 par défaut) est le seuil de décision de tous les tests. Chaque résultat rappelle H0 et H1, puis la règle :
+  p-value ≥ α → H0 n'est pas rejetée ; p-value < α → H0 est rejetée au profit de H1. Les intervalles de confiance suivent le même risque (niveau 1 − α).
+• Pour un test de normalité (quel que soit le test), H0 est « la série suit une loi normale » : la normalité n'est validée que si la p-value est supérieure ou égale à α.
+  De même, pour les contrôles de l'ANOVA (normalité des résidus, homogénéité des variances), H0 est l'hypothèse requise.
+• Le seuil de l'interaction de la R&R croisée (0,05 par défaut dans Minitab, 0,25 dans la norme AIAG) est un réglage propre à cette analyse.
 
 Analyses : 
 • Descriptif : effectif, moyenne, médiane, écart-type, variance, quartiles, extrêmes, Shapiro-Wilk.
-• Normalité : test de Shapiro-Wilk, histogramme et droite de Henry.
-• Test t : un échantillon, deux échantillons indépendants (Welch par défaut) ou appariés.
-• ANOVA : un facteur, colonnes = groupes ou format long ; contrôle des résidus ;
-  comparaisons de Tukey si le test global est significatif.
-• Capabilité : Pp/Ppk à partir de l'écart-type global ; Cp/Cpk/Cm/Cmk uniquement si un écart-type
-  intra-sous-groupe est fourni. Au moins une limite de spécification est requise.
-• Kappa de Cohen (non pondéré), deux modes :
+• Normalité : tests de Shapiro-Wilk, Anderson-Darling, Kolmogorov-Smirnov (Lilliefors), Cramér-von Mises, Jarque-Bera et Ryan-Joiner (Minitab) au choix, histogramme et droite de Henry, pour une ou plusieurs séries à la fois (un graphique par série).
+• Test t (Student) : un échantillon, deux échantillons indépendants (Welch par défaut, Student si les variances sont supposées égales) ou appariés.
+• Test F : compare les variances de deux séries (avec le test de Levene, plus robuste) et indique s'il faut préférer le test t de Student ou celui de Welch.
+• ANOVA : un facteur, colonnes = groupes ou format long ; taille d'effet η², contrôle des résidus, tests de Levene et de Fligner-Killeen,
+  ANOVA de Welch et Kruskal-Wallis en alternative ; comparaisons de Tukey si le test global est significatif (de Welch avec ajustement de Holm si les variances diffèrent).
+• Khi² : trois tests, avec données brutes (deux colonnes de catégories) ou tableau d'effectifs déjà compté :
+  – indépendance de deux variables ; homogénéité de plusieurs populations (même calcul, interprétation différente) ; effectifs observés et théoriques, résidus, V de Cramér,
+    correction de Yates et test exact de Fisher pour un tableau 2 × 2 ou si les effectifs théoriques sont trop petits ;
+  – conformité à une répartition attendue (proportions saisies, égales par défaut) ou à une loi normale (classes équiprobables ; moyenne et écart-type estimés ou donnés).
+• Capabilité : Pp/Ppk à partir de l'écart-type global ; Cp/Cpk/Cm/Cmk uniquement si un écart-type intra-sous-groupe est fourni. Au moins une limite de spécification est requise.
+• Kappa de Cohen (non pondéré), trois modes :
   – deux évaluations : accord entre deux colonnes de catégories ;
-  – référence (norme) : une colonne de référence et une colonne par évaluateur (ou par essai) ; le Kappa
-    de chaque évaluateur contre la référence dit s'il est satisfaisant (> 0,75), à améliorer (0,40 à 0,75)
-    ou insuffisant (< 0,40), avec l'accord en % et son intervalle de confiance, et l'accord des évaluateurs
-    entre eux.
+  – référence (norme) : une colonne de référence et une colonne par évaluateur (ou par essai) ; le Kappa de chaque évaluateur contre la référence dit s'il est satisfaisant (> 0,75),
+    à améliorer (0,40 à 0,75) ou insuffisant (< 0,40), avec l'accord en % et son intervalle de confiance, et l'accord des évaluateurs entre eux ;
+  – référence en format long : une ligne par évaluation (réponse, évaluateur, échantillon, essai éventuel et référence de l'échantillon, comme dans une analyse de concordance Minitab) ; 
+    les colonnes sont remises en forme automatiquement, sans modifier les données chargées, et le résultat est le même que dans le mode précédent.
   Interprétation selon l'échelle de Landis et Koch (1977) ; repères AIAG (MSA) pour les systèmes de mesure.
+• Cartes de contrôle : X-barre/R, X-barre/S et valeurs individuelles/étendues mobiles (I-MR) ; le choix automatique retient I-MR pour des valeurs seules, X-barre/R de 2 à 7 valeurs
+  par sous-groupe et X-barre/S à partir de 8. Données : une ligne par sous-groupe (une colonne par valeur) ou une colonne de mesures et une colonne qui désigne le sous-groupe ;
+  des sous-groupes de tailles différentes donnent des limites variables. Limites calculées d'après les données (3 écarts-types), 8 tests de causes spéciales au choix (1 à 4 par défaut),
+  écart-type intra-sous-groupe estimé, utilisable dans l'onglet Capabilité.
+• R&R, conventions de Minitab par défaut (à vérifier dans les résultats, qui les rappellent) :
+  – croisée : pièces × opérateurs × répétitions, une ligne par mesure, plan équilibré ; méthode ANOVA, interaction retirée si sa p-value dépasse 0,05 (AIAG : 0,25), composantes de variance,
+    % contribution, % variation d'étude (L = 6), % tolérance si la tolérance est donnée, nombre de catégories distinctes ; moins de 10 % acceptable, 10 à 30 % acceptable sous conditions, plus de 30 % inacceptable ;
+  – type 1 : une pièce étalon mesurée de nombreuses fois ; biais et test t, Cg et Cgk (K = 20 % de la tolérance, L = 6, seuil 1,33).
 
 Projet et rapport (onglet Rapport) :
 • Chaque analyse calculée est conservée dans le journal de l'onglet Rapport.
-• « Enregistrer le projet » sauvegarde les données, tous les résultats (texte, tableaux, graphiques) et les
-  réglages des onglets dans un fichier .statproj ; « Ouvrir un projet » reprend le travail où il s'était arrêté.
-• « Générer le rapport PDF » produit un rapport de synthèse : titre, auteur, conclusions saisies, synthèse des
-  analyses cochées, description des données, puis le détail de chaque analyse. Nécessite python3-reportlab.
+• « Enregistrer le projet » sauvegarde les données, tous les résultats (texte, tableaux, graphiques) et les réglages des onglets dans un fichier .statproj ; 
+  « Ouvrir un projet » reprend le travail où il s'était arrêté.
+• « Générer le rapport PDF » produit un rapport de synthèse : titre, auteur, conclusions saisies, synthèse des analyses cochées, description des données,
+  puis le détail de chaque analyse. Nécessite python3-reportlab.
 • Le rapport décrit les données actuellement chargées ; chaque analyse porte sur les données au moment du calcul.
 
 Précautions :
@@ -873,7 +1112,7 @@ class PanneauGraphiques:
         if not self.figures:
             return
         src = self.figures[self.i]
-        chemin = filedialog.asksaveasfilename(title="Enregistrer le graphique", defaultextension=".png", initialfile=src.name,
+        chemin = choisir_fichier_ecriture(self.win, title="Enregistrer le graphique", defaultextension=".png", initialfile=src.name,
                                               filetypes=[("Image PNG", "*.png")], initialdir=str(Path.home()))
         if chemin:
             shutil.copy(src, chemin)
@@ -917,7 +1156,6 @@ class DialogueGeneration:
         self.v_min, self.v_max = tk.StringVar(value="0"), tk.StringVar(value="1")
         self.v_dec, self.v_graine = tk.StringVar(value="3"), tk.StringVar()
         self.v_rempl = tk.BooleanVar(value=False)
-        self.v_msg = tk.StringVar()
 
         ttk.Label(cadre, text="Nom de la variable").grid(row=0, column=0, sticky="e", padx=4, pady=4)
         ttk.Entry(cadre, textvariable=self.v_nom, width=22).grid(row=0, column=1, columnspan=2, sticky="w", pady=4)
@@ -942,16 +1180,15 @@ class DialogueGeneration:
 
         ttk.Label(cadre, text="Décimales").grid(row=4, column=0, sticky="e", padx=4, pady=(10, 4))
         ttk.Entry(cadre, textvariable=self.v_dec, width=6).grid(row=4, column=1, sticky="w", pady=(10, 4))
-        ttk.Label(cadre, text="Graine (facultatif)").grid(row=4, column=2, columnspan=2, sticky="e", padx=(8, 4), pady=(10, 4))
+        ttk.Label(cadre, text="Valeur d'initialisation (facultatif)").grid(row=4, column=2, columnspan=2, sticky="e", padx=(8, 4), pady=(10, 4))
         ttk.Entry(cadre, textvariable=self.v_graine, width=10).grid(row=4, column=4, sticky="w", pady=(10, 4))
-        ttk.Label(cadre, text="Une même graine redonne exactement le même tirage.", foreground="#666666").grid(row=5, column=0, columnspan=5, sticky="w", padx=4)
+        ttk.Label(cadre, text="Une même valeur d'initialisation redonne exactement le même tirage.", foreground="#666666").grid(row=5, column=0, columnspan=5, sticky="w", padx=4)
         ttk.Checkbutton(cadre, text="Remplacer les données actuelles (sinon la variable est ajoutée)", variable=self.v_rempl).grid(row=6, column=0, columnspan=5, sticky="w", padx=4, pady=(8, 4))
 
         barre = ttk.Frame(cadre)
         barre.grid(row=7, column=0, columnspan=5, sticky="e", pady=(8, 0))
         ttk.Button(barre, text="Générer", command=self.generer).pack(side="left", padx=4)
         ttk.Button(barre, text="Fermer", command=self.win.destroy).pack(side="left", padx=4)
-        ttk.Label(cadre, textvariable=self.v_msg, foreground="#1f4e8c", wraplength=440).grid(row=8, column=0, columnspan=5, sticky="w", padx=4, pady=(6, 0))
         self._etat()
         self.win.bind("<Escape>", lambda e: self.win.destroy())
         self.win.bind("<Return>", lambda e: self.generer())
@@ -982,7 +1219,6 @@ class DialogueGeneration:
             messagebox.showerror(TITRE, str(e), parent=self.win)
             return
         self.app.donnees_generees(nom, len(valeurs))
-        self.v_msg.set(f"Variable « {nom} » : {len(valeurs)} valeur(s) ajoutée(s). {self.app.etude.donnees.resume()}")
         self.v_nom.set(self.app.nom_variable_suivant())
         self.v_rempl.set(False)
 
@@ -1099,7 +1335,7 @@ class ZoneResultat:
             self._ecrire("\n".join(res.lignes) + "\n\n", "para")
         for nom, (cols, rows) in res.tables.items():
             self._ecrire(libelle(nom) + "\n", "section")
-            self._ecrire(table_texte(cols, rows) + "\n\n")
+            self._ecrire(table_texte(cols, rows, libre=nom in res.libres) + "\n\n")
         for a in res.avertissements:
             self._ecrire("Remarque : " + a + "\n", "remarque")
         t.configure(state="disabled")
@@ -1112,7 +1348,7 @@ class ZoneResultat:
         if self.resultat is None:
             messagebox.showinfo(TITRE, "Aucun résultat à enregistrer.")
             return
-        chemin = filedialog.asksaveasfilename(title="Enregistrer le résultat", defaultextension=".txt",
+        chemin = choisir_fichier_ecriture(self.app.root, title="Enregistrer le résultat", defaultextension=".txt",
                                               filetypes=[("Texte", "*.txt")], initialdir=str(Path.home()))
         if not chemin:
             return
@@ -1123,10 +1359,102 @@ class ZoneResultat:
         self.app.statut(f"Résultat enregistré : {p.name}" + (" (figures PNG à côté)" if self.resultat.figures else ""))
 
 
+def _placer_fenetre(win, parent, largeur_min=460):
+    """Dimensionne une fenêtre de dialogue d'après son contenu (boutons toujours visibles) et la centre sur la fenêtre principale."""
+    win.update_idletasks()
+    w, h = max(win.winfo_reqwidth(), largeur_min), win.winfo_reqheight() + 8
+    win.minsize(w, h)
+    try:
+        x = parent.winfo_rootx() + (parent.winfo_width() - w) // 2
+        y = parent.winfo_rooty() + (parent.winfo_height() - h) // 3
+    except Exception:
+        x = y = 100
+    win.geometry(f"{w}x{h}+{max(x, 0)}+{max(y, 0)}")
+
+
+def boite_dialogue(parent, titre, message, boutons=("OK",), defaut=0, details=None):
+    """Petite boîte de dialogue à boutons personnalisés, au texte à la ligne ; retourne l'indice du bouton choisi
+    (le dernier si la fenêtre est fermée). 'details' : liste de couples (libellé, valeur) affichés « libellé : valeur » sur une ligne."""
+    import tkinter as tk
+    from tkinter import ttk
+    win = tk.Toplevel(parent)
+    win.title(titre)
+    win.transient(parent)
+    choix = {"i": len(boutons) - 1}
+
+    def fin(i):
+        choix["i"] = i
+        win.destroy()
+    cadre = ttk.Frame(win, padding=(16, 14, 16, 12))
+    cadre.pack(fill="both", expand=True)
+    barre = ttk.Frame(cadre)
+    barre.pack(side="bottom", anchor="e", pady=(14, 0))           # d'abord, pour rester visible même si la fenêtre est basse
+    boutons_tk = []
+    for i, texte in enumerate(boutons):
+        b = ttk.Button(barre, text=texte, command=lambda i=i: fin(i))
+        b.pack(side="left", padx=4)
+        boutons_tk.append(b)
+    if message:
+        ttk.Label(cadre, text=message, wraplength=520, justify="left", font=("TkDefaultFont", 10, "bold")).pack(anchor="w", fill="x", pady=(0, 6))
+    if details:
+        grille = ttk.Frame(cadre)
+        grille.pack(anchor="w", fill="x")
+        grille.columnconfigure(1, weight=1)
+        for r, (lib, val) in enumerate(details):
+            ttk.Label(grille, text=f"{lib} :").grid(row=r, column=0, sticky="nw", padx=(0, 6), pady=2)
+            ttk.Label(grille, text=val, wraplength=440, justify="left").grid(row=r, column=1, sticky="nw", pady=2)
+    win.bind("<Escape>", lambda e: fin(len(boutons) - 1))
+    win.bind("<Return>", lambda e: fin(defaut))
+    win.protocol("WM_DELETE_WINDOW", lambda: fin(len(boutons) - 1))
+    _placer_fenetre(win, parent)
+    win.grab_set()
+    boutons_tk[defaut].focus_set()
+    parent.wait_window(win)
+    return choix["i"]
+
+
+def choisir_fichier_ecriture(parent, **options):
+    """Choix d'un fichier à écrire. Le fichier existant est confirmé par une fenêtre propre (celle de Tk est tassée) ;
+    retourne le chemin, ou '' si l'utilisateur annule."""
+    from tkinter import filedialog
+    while True:
+        try:
+            chemin = filedialog.asksaveasfilename(parent=parent, confirmoverwrite=False, **options)
+        except Exception:
+            chemin = filedialog.asksaveasfilename(parent=parent, **options)
+        if not chemin:
+            return ""
+        p = Path(chemin)
+        if not p.exists():
+            return chemin
+        rep = boite_dialogue(parent, TITRE, "Ce fichier existe déjà. Voulez-vous le remplacer ?",
+                             ("Remplacer", "Choisir un autre nom", "Annuler"), defaut=1,
+                             details=[("Dossier", str(p.parent)), ("Fichier", p.name)])
+        if rep == 0:
+            return chemin
+        if rep == 2:
+            return ""
+        options["initialdir"], options["initialfile"] = str(p.parent), p.name
+
+
+ALT_F = ["Variances différentes", "Variance de X supérieure à celle de Y", "Variance de X inférieure à celle de Y"]
+ALT_F_R = dict(zip(ALT_F, ["two.sided", "greater", "less"]))
+TESTS_NORMALITE = {"sw": "Shapiro-Wilk", "ad": "Anderson-Darling", "lf": "Kolmogorov-Smirnov (Lilliefors)",
+                   "cvm": "Cramér-von Mises", "jb": "Jarque-Bera", "rj": "Ryan-Joiner"}
+TYPES_KHI2 = {"Indépendance de deux variables": "independance", "Homogénéité de plusieurs populations": "homogeneite",
+              "Conformité à une répartition ou à une loi": "conformite"}
+TYPES_CARTE = ["Automatique (selon la taille des sous-groupes)", "X-barre / R (moyennes et étendues)",
+               "X-barre / S (moyennes et écarts-types)", "Valeurs individuelles / étendues mobiles (I-MR)"]
+TYPES_CARTE_R = dict(zip(TYPES_CARTE, ["auto", "xbar_r", "xbar_s", "imr"]))
+LOIS_KHI2 = ["Répartition attendue (modalités)", "Loi normale"]
+
 PERMIS_UI = {"sep": ["Automatique", "Tabulation", "Point-virgule", "Virgule", "Espace"],
              "dec": ["Automatique", "Point", "Virgule"], "ent": ["Automatique", "Oui", "Non"],
-             "talt": ["Différent de", "Supérieur à", "Inférieur à"], "amode": ["large", "long"], "kmode": ["deux", "ref"]}
-COLONNES_UI = ("norm", "tx", "ty", "aval", "agrp", "cs", "ka", "kb", "kref")   # réglages qui désignent une colonne de données
+             "talt": ["Différent de", "Supérieur à", "Inférieur à"], "amode": ["large", "long"], "kmode": ["deux", "ref", "long"],
+             "falt": ALT_F, "xtype": list(TYPES_KHI2), "xformat": ["brut", "table"], "xloi": LOIS_KHI2,
+             "ctype": TYPES_CARTE, "cfmt": ["colonnes", "long"], "rrmode": ["croisee", "type1"]}
+COLONNES_UI = ("cordre", "tx", "ty", "aval", "agrp", "cs", "ka", "kb", "kref", "kresp", "kev", "kech", "kess", "kreflong",
+               "fx", "fy", "xa", "xb", "xvar", "xlab", "cval", "cgrp", "r1col", "rcp", "rco", "rcm")   # réglages qui désignent une colonne de données
 
 
 class Application:
@@ -1151,6 +1479,10 @@ class Application:
             pass
         root.minsize(860, 600)
         self.statut_var = tk.StringVar(value="Prêt.")
+        self.v_alpha = tk.StringVar(value="0,05")
+        self.v_gcol, self.v_gper = tk.StringVar(value=AUCUN_GROUPE), tk.StringVar(value="Jour")
+        self.v_gresume = tk.StringVar(value="aucun : toutes les données sont analysées ensemble.")
+        self.groupe_vals = []
         self._construire()
         self._maj_choix()
         root.protocol("WM_DELETE_WINDOW", self.quitter)
@@ -1201,6 +1533,11 @@ class Application:
         if self.occupe:
             self.statut("Un calcul est déjà en cours…")
             return
+        try:
+            self.etude.alpha = lire_alpha(self.v_alpha.get())
+        except ErreurStat as e:
+            zone.afficher_erreur(str(e))
+            return
         self.occupe = True
         self.etude.echelle = echelle_ecran(self.root)                    # graphiques R nets à la taille de l'écran
         self.statut("Calcul en cours…")
@@ -1226,16 +1563,38 @@ class Application:
     def _construire(self):
         ttk = self.ttk
         self.zones = []
+        barre = ttk.Frame(self.root)
+        barre.pack(fill="x", padx=8, pady=(8, 0))
+        ttk.Label(barre, text="Risque α des tests").pack(side="left")
+        ttk.Entry(barre, textvariable=self.v_alpha, width=7, justify="center").pack(side="left", padx=6)
+        ttk.Label(barre, foreground="#555555",
+                  text="(0,05 = 5 %) — H0 est rejetée si la p-value est inférieure à α ; elle est conservée si la p-value est supérieure ou égale à α.").pack(side="left")
+        barre2 = ttk.Frame(self.root)
+        barre2.pack(fill="x", padx=8, pady=(4, 0))
+        ttk.Label(barre2, text="Analyser par groupe").pack(side="left")
+        self.cb_gcol = ttk.Combobox(barre2, textvariable=self.v_gcol, state="readonly", width=22, values=[AUCUN_GROUPE])
+        self.cb_gcol.pack(side="left", padx=6)
+        self.cb_gcol.bind("<<ComboboxSelected>>", lambda e: self._changer_groupe())
+        self.cb_gper = ttk.Combobox(barre2, textvariable=self.v_gper, state="disabled", width=7, values=list(PERIODES_DATE))
+        self.cb_gper.pack(side="left")
+        self.cb_gper.bind("<<ComboboxSelected>>", lambda e: self._changer_groupe())
+        self.btn_groupes = ttk.Button(barre2, text="Choisir les groupes…", command=self._choisir_groupes, state="disabled")
+        self.btn_groupes.pack(side="left", padx=6)
+        ttk.Label(barre2, textvariable=self.v_gresume, foreground="#555555").pack(side="left", padx=4)
         nb = ttk.Notebook(self.root)
-        nb.pack(fill="both", expand=True, padx=8, pady=(8, 0))
+        nb.pack(fill="both", expand=True, padx=8, pady=(6, 0))
         ttk.Label(self.root, textvariable=self.statut_var, anchor="w", relief="sunken", padding=(6, 2)).pack(fill="x", padx=8, pady=6)
         self.nb = nb
         self._onglet_donnees(nb)
         self._onglet_descriptif(nb)
         self._onglet_normalite(nb)
         self._onglet_t(nb)
+        self._onglet_f(nb)
         self._onglet_anova(nb)
+        self._onglet_khi2(nb)
         self._onglet_capabilite(nb)
+        self._onglet_cartes(nb)
+        self._onglet_rr(nb)
         self._onglet_kappa(nb)
         self._onglet_rapport(nb)
         self._onglet_aide(nb)
@@ -1278,13 +1637,14 @@ class Application:
 
         pan = ttk.PanedWindow(f, orient="vertical")
         pan.pack(fill="both", expand=True, padx=8, pady=8)
-        cadre_s = ttk.LabelFrame(pan, text="Saisie ou collage (une série par colonne, noms de colonnes en première ligne)")
+        cadre_s = ttk.LabelFrame(pan, text="Saisie ou collage Ctrl+V (une série par colonne, noms de colonnes en première ligne)")
         from tkinter import font as tkfont
         self.saisie = tk.Text(cadre_s, height=8, undo=True, wrap="none", font=tkfont.nametofont("TkFixedFont"))
         sy = ttk.Scrollbar(cadre_s, orient="vertical", command=self.saisie.yview)
         self.saisie.configure(yscrollcommand=sy.set)
         sy.pack(side="right", fill="y")
         self.saisie.pack(fill="both", expand=True, padx=4, pady=4)
+        self._menu_saisie()
         pan.add(cadre_s, weight=1)
 
         cadre_a = ttk.LabelFrame(pan, text="Données chargées")
@@ -1300,6 +1660,120 @@ class Application:
         ay.pack(side="right", fill="y")
         self.arbre.pack(side="left", fill="both", expand=True)
         pan.add(cadre_a, weight=2)
+
+    def _menu_saisie(self):
+        """Menu du clic droit sur la zone de saisie (Couper, Copier, Coller, Tout sélectionner, Effacer)."""
+        tk = self.tk
+        t = self.saisie
+        menu = tk.Menu(t, tearoff=0)
+        menu.add_command(label="Couper", command=lambda: t.event_generate("<<Cut>>"))
+        menu.add_command(label="Copier", command=lambda: t.event_generate("<<Copy>>"))
+        menu.add_command(label="Coller", command=lambda: (t.focus_set(), t.event_generate("<<Paste>>")))
+        menu.add_separator()
+        menu.add_command(label="Tout sélectionner", command=lambda: (t.tag_add("sel", "1.0", "end-1c"), t.mark_set("insert", "end-1c")))
+        menu.add_command(label="Tout effacer", command=lambda: t.delete("1.0", "end"))
+
+        def ouvrir(ev):
+            t.focus_set()
+            a_selection = bool(t.tag_ranges("sel"))
+            menu.entryconfigure("Couper", state="normal" if a_selection else "disabled")
+            menu.entryconfigure("Copier", state="normal" if a_selection else "disabled")
+            try:
+                menu.tk_popup(ev.x_root, ev.y_root)
+            finally:
+                menu.grab_release()
+            return "break"
+
+        for seq in ("<Button-3>", "<Button-2>", "<Control-Button-1>"):
+            t.bind(seq, ouvrir)
+        self.menu_saisie = menu
+
+    # --- Analyse par groupe
+    def _periode_groupe(self, col):
+        d = self.etude.donnees
+        return PERIODES_DATE.get(self.v_gper.get(), "jour") if (d and col in d.types and d.types[col] == "date") else None
+
+    def _changer_groupe(self, garder=False):
+        """Colonne de groupes choisie : calcule les groupes (tous retenus, ou ceux déjà retenus si garder) et règle l'étude."""
+        d, col = self.etude.donnees, self.v_gcol.get()
+        ancien = list(self.groupe_vals)
+        if d is None or col not in d.colonnes:
+            self.v_gcol.set(AUCUN_GROUPE)
+            self.cb_gper.configure(state="disabled")
+            self.btn_groupes.configure(state="disabled")
+            self.groupe_vals = []
+            self.etude.groupe = None
+            self.v_gresume.set("aucun : toutes les données sont analysées ensemble.")
+            return
+        est_date = d.types[col] == "date"
+        self.cb_gper.configure(state="readonly" if est_date else "disabled")
+        tous = d.groupe_valeurs(col, self._periode_groupe(col))
+        if len(tous) > MAX_GROUPES:
+            from tkinter import messagebox
+            messagebox.showinfo(TITRE, f"La colonne « {col} » compte {len(tous)} groupes : le maximum est {MAX_GROUPES}."
+                                       + (" Choisir une période plus large (mois ou année)." if est_date else " Choisir une autre colonne."))
+            self.v_gcol.set(AUCUN_GROUPE)
+            self._changer_groupe()
+            return
+        retenus = [g for g in tous if g in ancien] if garder else []
+        self.groupe_vals = retenus or tous
+        self.btn_groupes.configure(state="normal")
+        self._maj_groupe()
+
+    def _maj_groupe(self):
+        d, col = self.etude.donnees, self.v_gcol.get()
+        if d is None or col not in d.colonnes or not self.groupe_vals:
+            self.etude.groupe = None
+            return
+        per = self._periode_groupe(col)
+        tous = d.groupe_valeurs(col, per)
+        self.etude.groupe = {"colonne": col, "periode": per, "valeurs": list(self.groupe_vals)}
+        liste = ", ".join(self.groupe_vals)
+        if len(liste) > 70:
+            liste = liste[:67] + "…"
+        self.v_gresume.set(f"{len(self.groupe_vals)} groupe(s) sur {len(tous)} : {liste} — chaque analyse est lancée groupe par groupe.")
+
+    def _choisir_groupes(self):
+        tk, ttk = self.tk, self.ttk
+        d, col = self.etude.donnees, self.v_gcol.get()
+        if d is None or col not in d.colonnes:
+            return
+        tous = d.groupe_valeurs(col, self._periode_groupe(col))
+        win = tk.Toplevel(self.root)
+        win.title(f"{TITRE} — groupes de « {col} »")
+        win.transient(self.root)
+        cadre = ttk.Frame(win, padding=12)
+        cadre.pack(fill="both", expand=True)
+        barre = ttk.Frame(cadre)
+        barre.pack(side="bottom", fill="x", pady=(10, 0))
+        ttk.Label(cadre, text="Groupes à analyser (un calcul et des graphiques par groupe)").pack(anchor="w", pady=(0, 6))
+        zone = ttk.Frame(cadre)
+        zone.pack(fill="both", expand=True)
+        lb = tk.Listbox(zone, selectmode="multiple", exportselection=False, height=min(max(len(tous), 4), 14), width=36)
+        sb = ttk.Scrollbar(zone, orient="vertical", command=lb.yview)
+        lb.configure(yscrollcommand=sb.set)
+        lb.pack(side="left", fill="both", expand=True)
+        sb.pack(side="left", fill="y")
+        for i, g in enumerate(tous):
+            lb.insert("end", g)
+            if g in self.groupe_vals:
+                lb.select_set(i)
+
+        def valider():
+            sel = [lb.get(i) for i in lb.curselection()]
+            if not sel:
+                from tkinter import messagebox
+                messagebox.showinfo(TITRE, "Choisir au moins un groupe.", parent=win)
+                return
+            self.groupe_vals = sel
+            self._maj_groupe()
+            win.destroy()
+        ttk.Button(barre, text="Tout", command=lambda: lb.select_set(0, "end")).pack(side="left")
+        ttk.Button(barre, text="Aucun", command=lambda: lb.selection_clear(0, "end")).pack(side="left", padx=4)
+        ttk.Button(barre, text="Annuler", command=win.destroy).pack(side="right")
+        ttk.Button(barre, text="OK", command=valider).pack(side="right", padx=4)
+        _placer_fenetre(win, self.root, 380)
+        win.grab_set()
 
     def _options_lecture(self):
         sep = {"Automatique": "auto", "Tabulation": "\t", "Point-virgule": ";", "Virgule": ",", "Espace": " "}[self.v_sep.get()]
@@ -1343,10 +1817,11 @@ class Application:
         arbre.delete(*arbre.get_children())
         arbre["columns"] = d.noms
         for n in d.noms:
-            arbre.heading(n, text=n + ("" if d.types[n] == "num" else " (texte)"))
-            arbre.column(n, width=110, anchor="e" if d.types[n] == "num" else "w", stretch=False)
+            arbre.heading(n, text=n + {"num": "", "date": " (date)"}.get(d.types[n], " (texte)"))
+            arbre.column(n, width=130 if d.types[n] == "date" else 110, anchor="e" if d.types[n] == "num" else "w", stretch=False)
+        dates = [d.types[n] == "date" for n in d.noms]
         for ligne in d.lignes(500):
-            arbre.insert("", "end", values=[fmt_nombre(v, 10) if v is not None else "" for v in ligne])
+            arbre.insert("", "end", values=[("" if v is None else (date_affichee(v) if dt else fmt_nombre(v, 10))) for v, dt in zip(ligne, dates)])
         self._maj_choix()
         msg = d.resume()
         if d.avertissements:
@@ -1358,7 +1833,7 @@ class Application:
         if self.etude.donnees is None:
             messagebox.showinfo(TITRE, "Aucune donnée chargée.")
             return
-        chemin = filedialog.asksaveasfilename(title="Exporter les données", defaultextension=".csv",
+        chemin = choisir_fichier_ecriture(self.root, title="Exporter les données", defaultextension=".csv",
                                               filetypes=[("CSV", "*.csv")], initialdir=str(Path.home()))
         if chemin:
             Path(chemin).write_text(self.etude.donnees.vers_csv_texte(), encoding="utf-8-sig")
@@ -1441,6 +1916,7 @@ class Application:
             return
         zone.afficher(e.res)
         self.nb.select(zone.frame.master)
+        self.statut(f"Analyse du {e.heure[11:16]} réaffichée dans l'onglet « {e.onglet} » : {e.res.titre}")
 
     def retirer_du_journal(self):
         sel = {int(i) for i in self.arbre_j.selection()}
@@ -1452,7 +1928,7 @@ class Application:
     def _onglet_rapport(self, nb):
         tk, ttk = self.tk, self.ttk
         f = self._onglet(nb, "Rapport")
-        projet = ttk.LabelFrame(f, text="Projet (reprendre le travail plus tard)")
+        projet = ttk.LabelFrame(f, text="Projet (pour analyse ultérieure)")
         projet.pack(fill="x", padx=8, pady=8)
         ttk.Button(projet, text="Enregistrer le projet…", command=self.enregistrer_projet).pack(side="left", padx=6, pady=6)
         ttk.Button(projet, text="Ouvrir un projet…", command=self.ouvrir_projet).pack(side="left", padx=6, pady=6)
@@ -1469,7 +1945,7 @@ class Application:
         ttk.Label(haut, text="Auteur").grid(row=1, column=0, sticky="e", padx=4, pady=2)
         ttk.Entry(haut, textvariable=self.v_rap_auteur, width=40).grid(row=1, column=1, sticky="w", pady=2)
 
-        ttk.Label(rap, text="Conclusions et commentaires (repris en tête du rapport)").pack(anchor="w", padx=10, pady=(6, 0))
+        ttk.Label(rap, text="Conclusions et commentaires (pour le rapport)").pack(anchor="w", padx=10, pady=(6, 0))
         cadre_t = ttk.Frame(rap)
         cadre_t.pack(fill="x", padx=8, pady=2)
         self.txt_rap = tk.Text(cadre_t, height=5, wrap="word", undo=True)
@@ -1478,7 +1954,7 @@ class Application:
         sy.pack(side="right", fill="y")
         self.txt_rap.pack(side="left", fill="x", expand=True)
 
-        ttk.Label(rap, text="Analyses effectuées (cliquer sur la case pour inclure ou non l'analyse dans le rapport)").pack(anchor="w", padx=10, pady=(8, 0))
+        ttk.Label(rap, text="Analyses effectuées (case : inclure ou non dans le rapport ; double-clic : revoir le résultat dans son onglet)").pack(anchor="w", padx=10, pady=(8, 0))
         cadre_j = ttk.Frame(rap)
         cadre_j.pack(fill="both", expand=True, padx=8, pady=2)
         self.arbre_j = ttk.Treeview(cadre_j, columns=("inc", "heure", "onglet", "titre"), show="headings", selectmode="extended", height=8)
@@ -1491,12 +1967,13 @@ class Application:
         sj.pack(side="right", fill="y")
         self.arbre_j.pack(side="left", fill="both", expand=True)
         self.arbre_j.bind("<Button-1>", self._clic_journal)
+        self.arbre_j.bind("<Double-Button-1>", lambda e: self.afficher_du_journal() if self.arbre_j.identify_column(e.x) != "#1" else None)
 
         boutons = ttk.Frame(rap)
         boutons.pack(fill="x", padx=8, pady=(4, 8))
         ttk.Button(boutons, text="Tout inclure", command=lambda: self._inclure_tout(True)).pack(side="left", padx=(0, 6))
         ttk.Button(boutons, text="Ne rien inclure", command=lambda: self._inclure_tout(False)).pack(side="left", padx=6)
-        ttk.Button(boutons, text="Afficher dans son onglet", command=self.afficher_du_journal).pack(side="left", padx=6)
+        ttk.Button(boutons, text="Revoir l'analyse sélectionnée", command=self.afficher_du_journal).pack(side="left", padx=6)
         ttk.Button(boutons, text="Retirer du journal", command=self.retirer_du_journal).pack(side="left", padx=6)
         ttk.Button(boutons, text="Générer le rapport PDF…", command=self.generer_pdf).pack(side="right")
 
@@ -1505,18 +1982,29 @@ class Application:
                 "commentaires": self.txt_rap.get("1.0", "end").strip()}
 
     def _vars_ui(self):
-        return {"sep": self.v_sep, "dec": self.v_dec, "ent": self.v_ent, "norm": self.v_norm, "tx": self.v_tx, "ty": self.v_ty,
+        return {"sep": self.v_sep, "dec": self.v_dec, "ent": self.v_ent, "alpha": self.v_alpha, "tx": self.v_tx, "ty": self.v_ty,
                 "mu": self.v_mu, "talt": self.v_talt, "tapp": self.v_tapp, "tvar": self.v_tvar, "amode": self.v_amode,
                 "aval": self.v_aval, "agrp": self.v_agrp, "cs": self.v_cs, "lsl": self.v_lsl, "cib": self.v_cib,
-                "usl": self.v_usl, "sig": self.v_sig, "kmode": self.v_kmode, "ka": self.v_ka, "kb": self.v_kb, "kref": self.v_kref}
+                "usl": self.v_usl, "sig": self.v_sig, "kmode": self.v_kmode, "ka": self.v_ka, "kb": self.v_kb, "kref": self.v_kref,
+                "kresp": self.v_kresp, "kev": self.v_kev, "kech": self.v_kech, "kess": self.v_kess, "kreflong": self.v_kreflong,
+                "fx": self.v_fx, "fy": self.v_fy, "falt": self.v_falt, "xtype": self.v_xtype, "xformat": self.v_xformat,
+                "xa": self.v_xa, "xb": self.v_xb, "xvar": self.v_xvar, "xlab": self.v_xlab, "xloi": self.v_xloi,
+                "xprop": self.v_xprop, "xmu": self.v_xmu, "xsd": self.v_xsd, "xk": self.v_xk,
+                "cordre": self.v_cordre, "ctype": self.v_ctype, "cfmt": self.v_cfmt, "cval": self.v_cval, "cgrp": self.v_cgrp,
+                **{f"ct{i + 1}": v for i, v in enumerate(self.v_ctests)},
+                **{f"nt_{k}": v for k, v in self.v_ntests.items()},
+                "rrmode": self.v_rrmode, "r1col": self.v_r1col, "r1ref": self.v_r1ref, "r1tol": self.v_r1tol, "r1k": self.v_r1k, "r1l": self.v_r1l,
+                "rcp": self.v_rcp, "rco": self.v_rco, "rcm": self.v_rcm, "rctol": self.v_rctol, "rcl": self.v_rcl, "rca": self.v_rca}
 
     def _listes_ui(self):
-        return {"desc": self.lb_desc, "anova": self.lb_anova, "kev": self.lb_kev}
+        return {"desc": self.lb_desc, "norm": self.lb_norm, "anova": self.lb_anova, "kev": self.lb_kev, "xcols": self.lb_xcols, "ccols": self.lb_ccols}
 
     def _etat_ui(self):
-        """Réglages courants des onglets (pour reprendre le travail à l'identique)."""
+        """Réglages courants des onglets (pour analyse ultérieure)."""
         etat = {"v": {k: v.get() for k, v in self._vars_ui().items()},
                 "listes": {k: [lb.get(i) for i in lb.curselection()] for k, lb in self._listes_ui().items()}}
+        if self.etude.groupe:
+            etat["groupe"] = {"colonne": self.etude.groupe["colonne"], "periode": self.v_gper.get(), "valeurs": list(self.groupe_vals)}
         try:
             etat["onglet"] = self.nb.index(self.nb.select())
         except Exception:
@@ -1539,10 +2027,11 @@ class Application:
             elif isinstance(val, str):
                 if cle in PERMIS_UI and val not in PERMIS_UI[cle]:
                     continue
-                if cle in COLONNES_UI and val not in noms and not (cle == "ty" and val.startswith("—")):
+                if cle in COLONNES_UI and val not in noms and not (cle in ("ty", "kess", "xlab", "cordre") and val.startswith("—")):
                     continue
                 var.set(val)
         listes = etat.get("listes") if isinstance(etat.get("listes"), dict) else {}
+        self.lb_xcols.configure(state="normal")
         for cle, lb in self._listes_ui().items():
             choisis = listes.get(cle)
             if not isinstance(choisis, list):
@@ -1551,6 +2040,14 @@ class Application:
             for i, n in enumerate(lb.get(0, "end")):
                 if n in choisis:
                     lb.selection_set(i)
+        self._maj_khi2()
+        g = etat.get("groupe")
+        if isinstance(g, dict) and isinstance(g.get("colonne"), str) and g["colonne"] in noms:
+            if g.get("periode") in PERIODES_DATE:
+                self.v_gper.set(g["periode"])
+            self.v_gcol.set(g["colonne"])
+            self.groupe_vals = [v for v in g.get("valeurs", []) if isinstance(v, str)]
+            self._changer_groupe(garder=True)
         idx, onglets = etat.get("onglet"), self.nb.tabs()
         if isinstance(idx, int) and not isinstance(idx, bool) and 0 <= idx < len(onglets):
             self.nb.select(onglets[idx])
@@ -1561,9 +2058,9 @@ class Application:
             messagebox.showinfo(TITRE, "Rien à enregistrer : aucune donnée ni aucun résultat.")
             return
         init = Path(self.projet_chemin) if self.projet_chemin else None
-        chemin = filedialog.asksaveasfilename(
-            title="Enregistrer le projet", defaultextension=EXT_PROJET,
-            filetypes=[("Projet Atelier statistique", f"*{EXT_PROJET}")],
+        chemin = choisir_fichier_ecriture(
+            self.root, title="Enregistrer le projet", defaultextension=EXT_PROJET,
+            filetypes=[("Projet Statistiques", f"*{EXT_PROJET}")],
             initialdir=str(init.parent if init else Path.home()),
             initialfile=init.name if init else f"projet_{datetime.date.today():%Y%m%d}{EXT_PROJET}")
         if not chemin:
@@ -1585,7 +2082,7 @@ class Application:
             return
         chemin = filedialog.askopenfilename(
             title="Ouvrir un projet", initialdir=str(Path(self.projet_chemin).parent if self.projet_chemin else Path.home()),
-            filetypes=[("Projet Atelier statistique", f"*{EXT_PROJET}"), ("Tous les fichiers", "*.*")])
+            filetypes=[("Projet Statistiques", f"*{EXT_PROJET}"), ("Tous les fichiers", "*.*")])
         if not chemin:
             return
         try:
@@ -1644,8 +2141,8 @@ class Application:
             return
         if not inclus and not messagebox.askyesno(TITRE, "Aucune analyse n'est cochée : le rapport ne contiendra que la description des données. Continuer ?"):
             return
-        chemin = filedialog.asksaveasfilename(
-            title="Enregistrer le rapport PDF", defaultextension=".pdf", filetypes=[("PDF", "*.pdf")],
+        chemin = choisir_fichier_ecriture(
+            self.root, title="Enregistrer le rapport PDF", defaultextension=".pdf", filetypes=[("PDF", "*.pdf")],
             initialdir=str(Path(self.projet_chemin).parent if self.projet_chemin else Path.home()),
             initialfile=f"Rapport_{datetime.date.today():%Y%m%d}.pdf")
         if not chemin:
@@ -1672,11 +2169,17 @@ class Application:
     def _pdf_termine(self, chemin):
         from tkinter import messagebox
         self.statut(f"Rapport enregistré : {Path(chemin).name}")
-        if messagebox.askyesno(TITRE, f"Rapport enregistré :\n{chemin}\n\nL'ouvrir maintenant ?"):
+        if self._demander_ouverture(chemin):
             try:
                 subprocess.Popen(["xdg-open", chemin], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             except Exception:
                 messagebox.showinfo(TITRE, "Ouverture automatique impossible : ouvrir le PDF depuis le gestionnaire de fichiers.")
+
+    def _demander_ouverture(self, chemin):
+        """Fenêtre « Rapport enregistré » : dossier et fichier à la ligne, boutons Ouvrir / Fermer toujours visibles."""
+        p = Path(chemin)
+        return boite_dialogue(self.root, TITRE, "Rapport enregistré", ("Ouvrir", "Fermer"), defaut=0,
+                              details=[("Dossier", str(p.parent)), ("Fichier", p.name)]) == 0
 
     # --- Onglets d'analyse
     def _liste_multi(self, parent, hauteur=4):
@@ -1711,24 +2214,34 @@ class Application:
         self.lancer(self.z_desc, lambda: self.etude.descriptif(cols))
 
     def _onglet_normalite(self, nb):
-        tk, ttk = self.tk, self.ttk
+        ttk = self.ttk
         f = self._onglet(nb, "Normalité")
         c = ttk.Frame(f)
         c.pack(fill="x", padx=8, pady=8)
-        self.v_norm = tk.StringVar()
-        ttk.Label(c, text="Série").pack(side="left", padx=(0, 8))
-        self.cb_norm = self._combo(c, self.v_norm)
-        self.cb_norm.pack(side="left")
-        ttk.Button(c, text="Lancer", command=self.run_normalite).pack(side="left", padx=12)
+        ttk.Label(c, text="Séries à tester").grid(row=0, column=0, sticky="nw", padx=(0, 8))
+        cadre, self.lb_norm = self._liste_multi(c)
+        cadre.grid(row=0, column=1, sticky="w")
+        b = ttk.Frame(c)
+        b.grid(row=0, column=2, padx=12, sticky="n")
+        ttk.Button(b, text="Tout sélectionner", command=lambda: self.lb_norm.select_set(0, "end")).pack(fill="x", pady=2)
+        ttk.Button(b, text="Lancer", command=self.run_normalite).pack(fill="x", pady=2)
+        ft = ttk.LabelFrame(c, text="Tests de normalité")
+        ft.grid(row=0, column=3, sticky="nw", padx=12)
+        self.v_ntests = {k: self.tk.BooleanVar(value=(k in ("sw", "ad"))) for k in TESTS_NORMALITE}
+        for k, lib in TESTS_NORMALITE.items():
+            ttk.Checkbutton(ft, text=lib, variable=self.v_ntests[k]).pack(anchor="w", padx=6)
+        ttk.Label(c, text="Un graphique (histogramme et droite de Henry) est tracé pour chaque série.\nLes tests n'ont pas tous la même puissance : Shapiro-Wilk et Anderson-Darling sont les plus sensibles ;\nJarque-Bera suppose beaucoup de données.",
+                  foreground="#555555", justify="left").grid(row=0, column=4, sticky="nw", padx=12)
         self.z_norm = self._nouvelle_zone(f, "Normalité")
 
     def run_normalite(self):
-        col = self.v_norm.get()                      # lecture des variables Tk dans le thread principal
-        self.lancer(self.z_norm, lambda: self.etude.normalite(col))
+        cols = [self.lb_norm.get(i) for i in self.lb_norm.curselection()]      # lecture dans le thread principal
+        tests = [k for k, v in self.v_ntests.items() if v.get()]
+        self.lancer(self.z_norm, lambda: self.etude.normalite(cols, tests))
 
     def _onglet_t(self, nb):
         tk, ttk = self.tk, self.ttk
-        f = self._onglet(nb, "Test t")
+        f = self._onglet(nb, "Test t (Student)")
         c = ttk.Frame(f)
         c.pack(fill="x", padx=8, pady=8)
         self.v_tx, self.v_ty = tk.StringVar(), tk.StringVar()
@@ -1793,6 +2306,265 @@ class Application:
             v, g = self.v_aval.get(), self.v_agrp.get()
             self.lancer(self.z_anova, lambda: self.etude.anova("long", valeur=v, groupe=g))
 
+    # --- Test F
+    def _onglet_f(self, nb):
+        tk, ttk = self.tk, self.ttk
+        f = self._onglet(nb, "Test F")
+        c = ttk.Frame(f)
+        c.pack(fill="x", padx=8, pady=8)
+        self.v_fx, self.v_fy = tk.StringVar(), tk.StringVar()
+        self.v_falt = tk.StringVar(value=ALT_F[0])
+        ttk.Label(c, text="Série X").grid(row=0, column=0, sticky="e", padx=4, pady=3)
+        self.cb_fx = self._combo(c, self.v_fx)
+        self.cb_fx.grid(row=0, column=1, sticky="w", pady=3)
+        ttk.Label(c, text="Série Y").grid(row=1, column=0, sticky="e", padx=4, pady=3)
+        self.cb_fy = self._combo(c, self.v_fy)
+        self.cb_fy.grid(row=1, column=1, sticky="w", pady=3)
+        ttk.Label(c, text="Hypothèse alternative").grid(row=2, column=0, sticky="e", padx=4, pady=3)
+        ttk.Combobox(c, textvariable=self.v_falt, state="readonly", width=34, values=ALT_F).grid(row=2, column=1, sticky="w", pady=3)
+        ttk.Label(c, text="Compare les variances de deux séries ; le résultat indique aussi s'il faut préférer le test t de Student ou celui de Welch.").grid(row=0, column=2, rowspan=2, sticky="w", padx=12)
+        ttk.Button(c, text="Lancer", command=self.run_f).grid(row=3, column=1, sticky="w", pady=8)
+        self.z_f = self._nouvelle_zone(f, "Test F")
+
+    def run_f(self):
+        x, y, alt = self.v_fx.get(), self.v_fy.get(), ALT_F_R[self.v_falt.get()]
+        self.lancer(self.z_f, lambda: self.etude.test_f(x, y, alt))
+
+    # --- Khi²
+    def _onglet_khi2(self, nb):
+        tk, ttk = self.tk, self.ttk
+        f = self._onglet(nb, "Khi²")
+        c = ttk.Frame(f)
+        c.pack(fill="x", padx=8, pady=8)
+        self.v_xtype = tk.StringVar(value=list(TYPES_KHI2)[0])
+        self.v_xformat = tk.StringVar(value="brut")
+        self.v_xa, self.v_xb, self.v_xvar, self.v_xlab = (tk.StringVar() for _ in range(4))
+        self.v_xloi = tk.StringVar(value=LOIS_KHI2[0])
+        self.v_xprop, self.v_xmu, self.v_xsd, self.v_xk = (tk.StringVar() for _ in range(4))
+        ttk.Label(c, text="Test").grid(row=0, column=0, sticky="e", padx=4, pady=3)
+        cb = ttk.Combobox(c, textvariable=self.v_xtype, state="readonly", width=44, values=list(TYPES_KHI2))
+        cb.grid(row=0, column=1, columnspan=3, sticky="w", pady=3)
+        cb.bind("<<ComboboxSelected>>", lambda e: self._maj_khi2())
+        ttk.Label(c, text="Données").grid(row=1, column=0, sticky="e", padx=4, pady=3)
+        self.rb_xbrut = ttk.Radiobutton(c, text="Données brutes (une ligne par individu)", variable=self.v_xformat, value="brut", command=self._maj_khi2)
+        self.rb_xbrut.grid(row=1, column=1, columnspan=3, sticky="w")
+        self.rb_xtab = ttk.Radiobutton(c, text="Tableau d'effectifs (cases déjà comptées)", variable=self.v_xformat, value="table", command=self._maj_khi2)
+        self.rb_xtab.grid(row=2, column=1, columnspan=3, sticky="w")
+        self.lb_xa_txt = ttk.Label(c, text="Variable A (lignes)")
+        self.lb_xa_txt.grid(row=3, column=0, sticky="e", padx=(20, 4), pady=3)
+        self.cb_xa = self._combo(c, self.v_xa)
+        self.cb_xa.grid(row=3, column=1, sticky="w")
+        self.lb_xb_txt = ttk.Label(c, text="Variable B (colonnes)")
+        self.lb_xb_txt.grid(row=4, column=0, sticky="e", padx=(20, 4), pady=3)
+        self.cb_xb = self._combo(c, self.v_xb)
+        self.cb_xb.grid(row=4, column=1, sticky="w")
+        self.lb_xcols_txt = ttk.Label(c, text="Colonnes d'effectifs")
+        self.lb_xcols_txt.grid(row=5, column=0, sticky="ne", padx=(20, 4), pady=3)
+        cadre, self.lb_xcols = self._liste_multi(c)
+        cadre.grid(row=5, column=1, sticky="w", pady=3)
+        self.lb_xlab_txt = ttk.Label(c, text="Libellés des lignes")
+        self.lb_xlab_txt.grid(row=6, column=0, sticky="e", padx=(20, 4), pady=3)
+        self.cb_xlab = self._combo(c, self.v_xlab)
+        self.cb_xlab.grid(row=6, column=1, sticky="w")
+        ttk.Separator(c, orient="vertical").grid(row=1, column=2, rowspan=6, sticky="ns", padx=14)
+        self.lb_xloi_txt = ttk.Label(c, text="Loi testée")
+        self.lb_xloi_txt.grid(row=1, column=3, sticky="e", padx=(0, 4), pady=3)
+        self.cb_xloi = ttk.Combobox(c, textvariable=self.v_xloi, state="readonly", width=34, values=LOIS_KHI2)
+        self.cb_xloi.grid(row=1, column=4, sticky="w", pady=3)
+        self.cb_xloi.bind("<<ComboboxSelected>>", lambda e: self._maj_khi2())
+        self.lb_xvar_txt = ttk.Label(c, text="Variable testée")
+        self.lb_xvar_txt.grid(row=2, column=3, sticky="e", padx=(0, 4), pady=3)
+        self.cb_xvar = self._combo(c, self.v_xvar)
+        self.cb_xvar.grid(row=2, column=4, sticky="w")
+        self.lb_xprop_txt = ttk.Label(c, text="Proportions attendues")
+        self.lb_xprop_txt.grid(row=3, column=3, sticky="e", padx=(0, 4), pady=3)
+        self.e_xprop = ttk.Entry(c, textvariable=self.v_xprop, width=36)
+        self.e_xprop.grid(row=3, column=4, sticky="w")
+        self.lb_xnorm_txt = ttk.Label(c, text="Moyenne, écart-type")
+        self.lb_xnorm_txt.grid(row=4, column=3, sticky="e", padx=(0, 4), pady=3)
+        fn = ttk.Frame(c)
+        fn.grid(row=4, column=4, sticky="w")
+        self.e_xmu = ttk.Entry(fn, textvariable=self.v_xmu, width=10)
+        self.e_xmu.pack(side="left")
+        self.e_xsd = ttk.Entry(fn, textvariable=self.v_xsd, width=10)
+        self.e_xsd.pack(side="left", padx=6)
+        self.lb_xk_txt = ttk.Label(c, text="Classes")
+        self.lb_xk_txt.grid(row=5, column=3, sticky="e", padx=(0, 4), pady=3)
+        self.e_xk = ttk.Entry(c, textvariable=self.v_xk, width=10)
+        self.e_xk.grid(row=5, column=4, sticky="w")
+        self.lb_xaide = ttk.Label(c, justify="left", foreground="#555555")
+        self.lb_xaide.grid(row=7, column=0, columnspan=5, sticky="w", padx=20, pady=(2, 0))
+        ttk.Button(c, text="Lancer", command=self.run_khi2).grid(row=8, column=1, sticky="w", pady=8)
+        self.z_x = self._nouvelle_zone(f, "Khi²")
+        self._maj_khi2()
+
+    def _maj_khi2(self):
+        """Active seulement les champs utiles au test et au format de données choisis."""
+        tl = TYPES_KHI2.get(self.v_xtype.get(), "independance")
+        brut = self.v_xformat.get() == "brut"
+        conf = tl == "conformite"
+        normale = conf and self.v_xloi.get() == LOIS_KHI2[1]
+        if normale:
+            brut = True
+
+        def etat(widgets, actif):
+            for w in widgets:
+                try:
+                    w.configure(state=("readonly" if isinstance(w, self.ttk.Combobox) else "normal") if actif else "disabled")
+                except Exception:
+                    pass
+        etat([self.cb_xa, self.cb_xb], not conf and brut)
+        etat([self.lb_xcols, self.cb_xlab], not normale and not brut)
+        etat([self.cb_xloi], conf)
+        etat([self.cb_xvar], conf and brut)
+        etat([self.e_xprop], conf and not normale)
+        etat([self.e_xmu, self.e_xsd, self.e_xk], normale)
+        for rb in (self.rb_xbrut, self.rb_xtab):
+            rb.configure(state="disabled" if normale else "normal")
+        if tl == "homogeneite":
+            self.lb_xa_txt.configure(text="Populations (lignes)")
+            self.lb_xb_txt.configure(text="Variable étudiée (colonnes)")
+            self.lb_xcols_txt.configure(text="Colonnes d'effectifs (modalités)")
+            self.lb_xlab_txt.configure(text="Nom des populations")
+        else:
+            self.lb_xa_txt.configure(text="Variable A (lignes)")
+            self.lb_xb_txt.configure(text="Variable B (colonnes)")
+            self.lb_xcols_txt.configure(text="Colonnes d'effectifs" if not conf else "Colonne des effectifs observés")
+            self.lb_xlab_txt.configure(text="Libellés des lignes" if not conf else "Libellés des modalités")
+        if conf:
+            self.lb_xaide.configure(text="Conformité : les effectifs observés sont comparés à une répartition attendue (une proportion par modalité, séparées par des espaces ; vide = égales)\n"
+                                         "ou à une loi normale sur des données numériques (moyenne et écart-type facultatifs, estimés si vides ; classes vide = automatique).")
+        else:
+            self.lb_xaide.configure(text="Tableau d'effectifs : une ligne par ligne du tableau, une colonne par modalité, et si on le souhaite une colonne de libellés des lignes.\n"
+                                         "Données brutes : deux colonnes de catégories, une ligne par individu.")
+
+    def run_khi2(self):
+        tl = TYPES_KHI2[self.v_xtype.get()]
+        fmt = self.v_xformat.get()
+        lab = self.v_xlab.get()
+        lab = "" if lab.startswith("—") else lab
+        cols = [self.lb_xcols.get(i) for i in self.lb_xcols.curselection()]
+        try:
+            if tl == "conformite":
+                normale = self.v_xloi.get() == LOIS_KHI2[1]
+                params = {"test": "conformite", "loi": "normale" if normale else "repartition", "format": "brut" if normale else fmt,
+                          "variable": self.v_xvar.get(), "colonnes": cols, "libelles": lab, "proportions": self.v_xprop.get(),
+                          "moyenne": lire_nombre(self.v_xmu.get(), "la moyenne") if normale else None,
+                          "ecart_type": lire_nombre(self.v_xsd.get(), "l'écart-type") if normale else None,
+                          "classes": lire_nombre(self.v_xk.get(), "le nombre de classes") if normale else None}
+            else:
+                params = {"test": tl, "format": fmt, "a": self.v_xa.get(), "b": self.v_xb.get(), "colonnes": cols, "libelles": lab}
+        except ErreurStat as e:
+            self.z_x.afficher_erreur(str(e))
+            return
+        self.lancer(self.z_x, lambda: self.etude.commande("khi2", params))
+
+    # --- Cartes de contrôle
+    def _onglet_cartes(self, nb):
+        tk, ttk = self.tk, self.ttk
+        f = self._onglet(nb, "Cartes de contrôle")
+        c = ttk.Frame(f)
+        c.pack(fill="x", padx=8, pady=8)
+        self.v_ctype = tk.StringVar(value=TYPES_CARTE[0])
+        self.v_cfmt = tk.StringVar(value="colonnes")
+        self.v_cval, self.v_cgrp = tk.StringVar(), tk.StringVar()
+        self.v_cordre = tk.StringVar(value=AUCUN_ORDRE)
+        self.v_ctests = [tk.BooleanVar(value=(i < 4)) for i in range(8)]
+        ttk.Label(c, text="Type de carte").grid(row=0, column=0, sticky="e", padx=4, pady=3)
+        ttk.Combobox(c, textvariable=self.v_ctype, state="readonly", width=48, values=TYPES_CARTE).grid(row=0, column=1, columnspan=2, sticky="w", pady=3)
+        ttk.Radiobutton(c, text="Chaque ligne est un sous-groupe ; les colonnes choisies en sont les valeurs", variable=self.v_cfmt, value="colonnes").grid(row=1, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        cadre, self.lb_ccols = self._liste_multi(c)
+        cadre.grid(row=2, column=1, sticky="w", pady=3)
+        ttk.Label(c, text="Colonnes").grid(row=2, column=0, sticky="ne", padx=(20, 4), pady=3)
+        ttk.Label(c, text="Les cellules vides donnent des sous-groupes de tailles différentes.\nValeurs individuelles : une seule colonne.", foreground="#555555", justify="left").grid(row=2, column=2, sticky="nw", padx=12)
+        ttk.Radiobutton(c, text="Une colonne de mesures et une colonne qui désigne le sous-groupe de chaque mesure", variable=self.v_cfmt, value="long").grid(row=3, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        ttk.Label(c, text="Mesures").grid(row=4, column=0, sticky="e", padx=(20, 4), pady=3)
+        self.cb_cval = self._combo(c, self.v_cval)
+        self.cb_cval.grid(row=4, column=1, sticky="w")
+        ttk.Label(c, text="Sous-groupes").grid(row=5, column=0, sticky="e", padx=(20, 4), pady=3)
+        self.cb_cgrp = self._combo(c, self.v_cgrp)
+        self.cb_cgrp.grid(row=5, column=1, sticky="w")
+        ttk.Label(c, text="Des sous-groupes de tailles différentes donnent des limites de contrôle variables.", foreground="#555555").grid(row=5, column=2, sticky="w", padx=12)
+        ttk.Label(c, text="Tests de causes spéciales").grid(row=6, column=0, sticky="e", padx=4, pady=(10, 3))
+        ft = ttk.Frame(c)
+        ft.grid(row=6, column=1, columnspan=2, sticky="w", pady=(10, 3))
+        for i, v in enumerate(self.v_ctests):
+            ttk.Checkbutton(ft, text=str(i + 1), variable=v).pack(side="left", padx=4)
+        ttk.Label(c, text="1 : point hors limites — 2 : 9 points du même côté — 3 : 6 points en tendance — 4 : 14 points alternés — 5 à 8 : règles des zones (Minitab / Nelson)",
+                  foreground="#555555").grid(row=7, column=0, columnspan=3, sticky="w", padx=20)
+        ttk.Label(c, text="Ordre des données").grid(row=8, column=0, sticky="e", padx=4, pady=(10, 3))
+        self.cb_cordre = ttk.Combobox(c, textvariable=self.v_cordre, state="readonly", width=26, values=[AUCUN_ORDRE])
+        self.cb_cordre.grid(row=8, column=1, sticky="w", pady=(10, 3))
+        ttk.Label(c, text="Une colonne de dates (ou de numéros d'ordre) trie les points chronologiquement et sert d'étiquette à l'axe.", foreground="#555555").grid(row=8, column=2, sticky="w", padx=12, pady=(10, 3))
+        ttk.Button(c, text="Lancer", command=self.run_carte).grid(row=9, column=1, sticky="w", pady=8)
+        self.z_carte = self._nouvelle_zone(f, "Cartes de contrôle")
+
+    def run_carte(self):
+        type_ = TYPES_CARTE_R[self.v_ctype.get()]
+        tests = [i + 1 for i, v in enumerate(self.v_ctests) if v.get()]
+        params = {"type": type_, "format": self.v_cfmt.get(), "colonnes": [self.lb_ccols.get(i) for i in self.lb_ccols.curselection()],
+                  "valeur": self.v_cval.get(), "groupe": self.v_cgrp.get(), "tests": tests or [0],
+                  "ordre": "" if self.v_cordre.get() == AUCUN_ORDRE else self.v_cordre.get()}
+        self.lancer(self.z_carte, lambda: self.etude.commande("carte", params))
+
+    # --- R&R
+    def _onglet_rr(self, nb):
+        tk, ttk = self.tk, self.ttk
+        f = self._onglet(nb, "R&R")
+        c = ttk.Frame(f)
+        c.pack(fill="x", padx=8, pady=8)
+        self.v_rrmode = tk.StringVar(value="croisee")
+        self.v_r1col, self.v_r1ref, self.v_r1tol = tk.StringVar(), tk.StringVar(), tk.StringVar()
+        self.v_r1k, self.v_r1l = tk.StringVar(value="20"), tk.StringVar(value="6")
+        self.v_rcp, self.v_rco, self.v_rcm = tk.StringVar(), tk.StringVar(), tk.StringVar()
+        self.v_rctol, self.v_rcl, self.v_rca = tk.StringVar(), tk.StringVar(value="6"), tk.StringVar(value="0,05")
+        ttk.Radiobutton(c, text="R&R croisée : pièces × opérateurs × répétitions (une ligne par mesure)", variable=self.v_rrmode, value="croisee").grid(row=0, column=0, columnspan=4, sticky="w")
+        for i, (lib, var, attr) in enumerate([("Pièces", self.v_rcp, "cb_rcp"), ("Opérateurs", self.v_rco, "cb_rco"), ("Mesures", self.v_rcm, "cb_rcm")]):
+            ttk.Label(c, text=lib).grid(row=1 + i, column=0, sticky="e", padx=(20, 4), pady=3)
+            cb = self._combo(c, var)
+            cb.grid(row=1 + i, column=1, sticky="w")
+            setattr(self, attr, cb)
+        ttk.Label(c, text="Tolérance (facultative)").grid(row=1, column=2, sticky="e", padx=(16, 4))
+        ttk.Entry(c, textvariable=self.v_rctol, width=12).grid(row=1, column=3, sticky="w")
+        ttk.Label(c, text="L (écarts-types de la variation d'étude)").grid(row=2, column=2, sticky="e", padx=(16, 4))
+        ttk.Entry(c, textvariable=self.v_rcl, width=12).grid(row=2, column=3, sticky="w")
+        ttk.Label(c, text="Seuil de l'interaction").grid(row=3, column=2, sticky="e", padx=(16, 4))
+        ttk.Entry(c, textvariable=self.v_rca, width=12).grid(row=3, column=3, sticky="w")
+        ttk.Radiobutton(c, text="R&R de type 1 : une seule pièce étalon mesurée de nombreuses fois", variable=self.v_rrmode, value="type1").grid(row=4, column=0, columnspan=4, sticky="w", pady=(10, 0))
+        ttk.Label(c, text="Mesures").grid(row=5, column=0, sticky="e", padx=(20, 4), pady=3)
+        self.cb_r1col = self._combo(c, self.v_r1col)
+        self.cb_r1col.grid(row=5, column=1, sticky="w")
+        ttk.Label(c, text="Valeur de référence").grid(row=6, column=0, sticky="e", padx=(20, 4), pady=3)
+        ttk.Entry(c, textvariable=self.v_r1ref, width=14).grid(row=6, column=1, sticky="w")
+        ttk.Label(c, text="Tolérance").grid(row=5, column=2, sticky="e", padx=(16, 4))
+        ttk.Entry(c, textvariable=self.v_r1tol, width=12).grid(row=5, column=3, sticky="w")
+        ttk.Label(c, text="K (% de la tolérance)").grid(row=6, column=2, sticky="e", padx=(16, 4))
+        ttk.Entry(c, textvariable=self.v_r1k, width=12).grid(row=6, column=3, sticky="w")
+        ttk.Label(c, text="L (écarts-types)").grid(row=7, column=2, sticky="e", padx=(16, 4))
+        ttk.Entry(c, textvariable=self.v_r1l, width=12).grid(row=7, column=3, sticky="w")
+        ttk.Label(c, text="Valeurs par défaut : conventions de Minitab (méthode ANOVA, L = 6, interaction retirée au seuil 0,05 ; type 1 : K = 20 %, L = 6, Cg et Cgk ≥ 1,33).\n"
+                          "La norme AIAG retient 0,25 pour le seuil de l'interaction. La tolérance est l'écart entre les limites de spécification.",
+                  foreground="#555555", justify="left").grid(row=8, column=0, columnspan=4, sticky="w", padx=20, pady=(8, 0))
+        ttk.Button(c, text="Calculer", command=self.run_rr).grid(row=9, column=1, sticky="w", pady=8)
+        self.z_rr = self._nouvelle_zone(f, "R&R")
+
+    def run_rr(self):
+        try:
+            if self.v_rrmode.get() == "type1":
+                params = {"colonne": self.v_r1col.get(), "reference": lire_nombre(self.v_r1ref.get(), "la valeur de référence"),
+                          "tolerance": lire_nombre(self.v_r1tol.get(), "la tolérance"), "k": lire_nombre(self.v_r1k.get(), "K"),
+                          "l": lire_nombre(self.v_r1l.get(), "L")}
+                cmd = "rr1"
+            else:
+                params = {"piece": self.v_rcp.get(), "operateur": self.v_rco.get(), "mesure": self.v_rcm.get(),
+                          "tolerance": lire_nombre(self.v_rctol.get(), "la tolérance"), "l": lire_nombre(self.v_rcl.get(), "L"),
+                          "alpha": lire_nombre(self.v_rca.get(), "le seuil de l'interaction")}
+                cmd = "rr_croisee"
+        except ErreurStat as e:
+            self.z_rr.afficher_erreur(str(e))
+            return
+        self.lancer(self.z_rr, lambda: self.etude.commande(cmd, params))
+
     def _onglet_capabilite(self, nb):
         tk, ttk = self.tk, self.ttk
         f = self._onglet(nb, "Capabilité")
@@ -1831,6 +2603,8 @@ class Application:
         c.pack(fill="x", padx=8, pady=8)
         self.v_kmode = tk.StringVar(value="deux")
         self.v_ka, self.v_kb, self.v_kref = tk.StringVar(), tk.StringVar(), tk.StringVar()
+        self.v_kresp, self.v_kev, self.v_kech = tk.StringVar(), tk.StringVar(), tk.StringVar()
+        self.v_kess, self.v_kreflong = tk.StringVar(), tk.StringVar()
         ttk.Radiobutton(c, text="Comparer deux évaluations", variable=self.v_kmode, value="deux").grid(row=0, column=0, columnspan=3, sticky="w")
         ttk.Label(c, text="Première évaluation").grid(row=1, column=0, sticky="e", padx=(20, 4), pady=3)
         self.cb_ka = self._combo(c, self.v_ka)
@@ -1838,7 +2612,7 @@ class Application:
         ttk.Label(c, text="Deuxième évaluation").grid(row=2, column=0, sticky="e", padx=(20, 4), pady=3)
         self.cb_kb = self._combo(c, self.v_kb)
         self.cb_kb.grid(row=2, column=1, sticky="w")
-        ttk.Radiobutton(c, text="Comparer des évaluateurs à une référence (norme)", variable=self.v_kmode, value="ref").grid(row=3, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        ttk.Radiobutton(c, text="Comparer des évaluateurs à une référence (norme) — une colonne par évaluateur", variable=self.v_kmode, value="ref").grid(row=3, column=0, columnspan=3, sticky="w", pady=(8, 0))
         ttk.Label(c, text="Référence (norme)").grid(row=4, column=0, sticky="e", padx=(20, 4), pady=3)
         self.cb_kref = self._combo(c, self.v_kref)
         self.cb_kref.grid(row=4, column=1, sticky="w")
@@ -1847,14 +2621,29 @@ class Application:
         cadre.grid(row=5, column=1, sticky="w", pady=3)
         ttk.Label(c, text="Une ligne par échantillon : une colonne pour la référence (valeur reconnue) et une colonne par évaluateur (ou par essai).\n"
                           "Kappa > 0,75 : satisfaisant ; de 0,40 à 0,75 : à améliorer ; < 0,40 : insuffisant (repères AIAG).").grid(row=5, column=2, sticky="w", padx=12)
-        ttk.Button(c, text="Calculer", command=self.run_kappa).grid(row=6, column=1, sticky="w", pady=8)
+        ttk.Radiobutton(c, text="Comparer des évaluateurs à une référence (norme) — données en format long (une ligne par évaluation)", variable=self.v_kmode, value="long").grid(row=6, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        lignes = [("Réponse", self.v_kresp, "cb_kresp"), ("Évaluateur", self.v_kev, "cb_kevl"), ("Échantillon (pièce)", self.v_kech, "cb_kech"),
+                  ("Essai (facultatif)", self.v_kess, "cb_kess"), ("Référence (norme)", self.v_kreflong, "cb_kreflong")]
+        for k, (lib, var, attr) in enumerate(lignes):
+            ttk.Label(c, text=lib).grid(row=7 + k, column=0, sticky="e", padx=(20, 4), pady=3)
+            cb = self._combo(c, var)
+            cb.grid(row=7 + k, column=1, sticky="w")
+            setattr(self, attr, cb)
+        ttk.Label(c, text="Une ligne par évaluation : la réponse donnée, l'évaluateur, l'échantillon (et l'essai s'il y en a plusieurs)\n"
+                          "et la valeur de référence de l'échantillon, répétée sur chaque ligne.").grid(row=7, column=2, rowspan=2, sticky="w", padx=12)
+        ttk.Button(c, text="Calculer", command=self.run_kappa).grid(row=12, column=1, sticky="w", pady=8)
         self.z_kappa = self._nouvelle_zone(f, "Kappa")
 
     def run_kappa(self):
-        if self.v_kmode.get() == "ref":
+        mode = self.v_kmode.get()
+        if mode == "ref":
             ref = self.v_kref.get()
             evs = [self.lb_kev.get(i) for i in self.lb_kev.curselection()]
             self.lancer(self.z_kappa, lambda: self.etude.kappa_reference(ref, evs))
+        elif mode == "long":
+            resp, ev, ech = self.v_kresp.get(), self.v_kev.get(), self.v_kech.get()
+            ess, ref = self.v_kess.get(), self.v_kreflong.get()
+            self.lancer(self.z_kappa, lambda: self.etude.kappa_long(resp, ev, ech, ess if not ess.startswith("—") else None, ref))
         else:
             a, b = self.v_ka.get(), self.v_kb.get()
             self.lancer(self.z_kappa, lambda: self.etude.kappa(a, b))
@@ -1874,14 +2663,21 @@ class Application:
         num = d.noms_num if d else []
         tout = d.noms if d else []
         txt = d.noms_txt if d else []
+        self.cb_gcol["values"] = [AUCUN_GROUPE] + tout
+        self._changer_groupe(garder=True)
+        self.cb_cordre["values"] = [AUCUN_ORDRE] + (d.noms_date if d else []) + num
+        self.v_cordre.set(d.noms_date[0] if d and d.noms_date else AUCUN_ORDRE)
         self.lb_desc.delete(0, "end")
+        self.lb_norm.delete(0, "end")
         self.lb_anova.delete(0, "end")
         for n in num:
             self.lb_desc.insert("end", n)
+            self.lb_norm.insert("end", n)
             self.lb_anova.insert("end", n)
         self.lb_desc.select_set(0, "end")
+        self.lb_norm.select_set(0, "end")
         self.lb_anova.select_set(0, "end")
-        for cb, vals, var in [(self.cb_norm, num, self.v_norm), (self.cb_tx, num, self.v_tx), (self.cb_cap, num, self.v_cs),
+        for cb, vals, var in [(self.cb_tx, num, self.v_tx), (self.cb_cap, num, self.v_cs),
                               (self.cb_aval, num, self.v_aval), (self.cb_agrp, tout, self.v_agrp),
                               (self.cb_ka, tout, self.v_ka), (self.cb_kb, tout, self.v_kb), (self.cb_kref, tout, self.v_kref)]:
             cb["values"] = vals
@@ -1894,11 +2690,70 @@ class Application:
         if len(cand) >= 2:
             self.v_ka.set(cand[0])
             self.v_kb.set(cand[1])
+        for cb, vals, var in [(self.cb_fx, num, self.v_fx), (self.cb_fy, num, self.v_fy), (self.cb_xa, tout, self.v_xa),
+                              (self.cb_xb, tout, self.v_xb), (self.cb_xvar, tout, self.v_xvar)]:
+            cb["values"] = vals
+            var.set(vals[0] if vals else "")
+        if len(num) >= 2:
+            self.v_fy.set(num[1])
+        if len(tout) >= 2:
+            self.v_xb.set(tout[1])
+        self.cb_xlab["values"] = ["— aucune —"] + tout
+        self.v_xlab.set(txt[0] if txt else "— aucune —")
+        self.lb_xcols.configure(state="normal")          # une liste désactivée ignore les modifications
+        self.lb_xcols.delete(0, "end")
+        for n in num:
+            self.lb_xcols.insert("end", n)
+        self.lb_xcols.select_set(0, "end")
+        self._maj_khi2()
+        self.lb_ccols.delete(0, "end")
+        for n in num:
+            self.lb_ccols.insert("end", n)
+        self.lb_ccols.select_set(0, "end")
+        self.cb_cval["values"] = num
+        self.cb_cgrp["values"] = tout
+        self.v_cval.set(num[0] if num else "")
+        self.v_cgrp.set(txt[0] if txt else (tout[1] if len(tout) > 1 else ""))
+        self.v_cfmt.set("long" if (txt and num) else "colonnes")
+        def trouver_rr(mots, parmi, exclus=()):
+            return next((n for n in parmi if n not in exclus and any(m in n.lower() for m in mots)), "")
+        rc_p = trouver_rr(MOTS_ECHANTILLON, tout)
+        rc_o = trouver_rr(MOTS_EVALUATEUR, tout, (rc_p,))
+        rc_m = trouver_rr(("mesure", "valeur", "measure", "reponse", "réponse", "resultat", "résultat"), num, (rc_p, rc_o)) \
+            or next((n for n in reversed(num) if n not in (rc_p, rc_o) and not any(m in n.lower() for m in MOTS_ESSAI)), "")
+        for cb in (self.cb_rcp, self.cb_rco):
+            cb["values"] = tout
+        self.cb_rcm["values"] = num
+        self.cb_r1col["values"] = num
+        self.v_rcp.set(rc_p or (tout[0] if tout else ""))
+        self.v_rco.set(rc_o or (tout[1] if len(tout) > 1 else ""))
+        self.v_rcm.set(rc_m or (num[-1] if num else ""))
+        self.v_r1col.set(num[0] if num else "")
+        self.v_rrmode.set("croisee" if (rc_p and rc_o) else "type1")
         self.lb_kev.delete(0, "end")
         for n in tout:
             self.lb_kev.insert("end", n)
+        def trouver(mots, exclus=()):
+            return next((n for n in tout if n not in exclus and any(m in n.lower() for m in mots)), "")
         refs = [n for n in tout if any(m in n.lower() for m in MOTS_REFERENCE)]
-        if refs:                                       # colonne de référence (norme) reconnue par son nom : mode référence
+        long_ref = refs[0] if refs else ""
+        long_ev = trouver(MOTS_EVALUATEUR, (long_ref,))
+        long_rep = trouver(MOTS_REPONSE, (long_ref, long_ev))
+        long_ech = trouver(MOTS_ECHANTILLON, (long_ref, long_ev, long_rep))
+        long_ess = trouver(MOTS_ESSAI, (long_ref, long_ev, long_rep, long_ech))
+        for cb in (self.cb_kresp, self.cb_kevl, self.cb_kech, self.cb_kreflong):
+            cb["values"] = tout
+        self.cb_kess["values"] = ["— aucun —"] + tout
+        self.v_kresp.set(long_rep or (tout[0] if tout else ""))
+        self.v_kev.set(long_ev or (tout[1] if len(tout) > 1 else ""))
+        self.v_kech.set(long_ech or (tout[2] if len(tout) > 2 else ""))
+        self.v_kess.set(long_ess or "— aucun —")
+        self.v_kreflong.set(long_ref or (tout[-1] if tout else ""))
+        format_long = bool(long_ref and long_ev and long_rep and long_ech)
+        if format_long:
+            ref, evs = long_ref, []
+            self.v_kmode.set("long")
+        elif refs:                                       # colonne de référence (norme) reconnue par son nom : mode référence
             ref, evs = refs[0], [n for n in cand if n != refs[0]]
             self.v_kmode.set("ref")
         else:

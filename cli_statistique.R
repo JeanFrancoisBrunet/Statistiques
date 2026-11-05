@@ -10,6 +10,7 @@
 #
 #  Commandes (champ "commande" de params.json) :
 #    descriptif, normalite, t, anova, capabilite, kappa
+#    et, dans commandes_avancees.R : ftest, khi2, carte, rr1, rr_croisee
 #  Dépendance R : jsonlite  (sudo apt install r-cran-jsonlite)
 #  Auteur : Jean-François BRUNET – JFBConseils – Octobre 2026
 # =============================================================================
@@ -75,15 +76,49 @@ fmt <- function(v, n = 6) {
                 sub("\\.", ",", format(signif(v, n), scientific = FALSE, trim = TRUE))))
 }
 fmt_p <- function(p) {
-  if (is.na(p)) "non calculable" else if (p < 1e-4) "< 0,0001" else sub("\\.", ",", format(round(p, 4), nsmall = 4))
+  if (is.na(p)) "non calculable" else if (p < 1e-4) "< 0,0001" else sub("\\.", ",", formatC(round(p, 4), format = "f", digits = 4))
+}
+ALPHA <- 0.05  # risque alpha des tests (fixé par params.json : alpha_test)
+alpha_txt <- function() alpha_dec(ALPHA)
+conf_txt <- function() pct_txt(1 - ALPHA)
+regle <- function() sprintf("Règle de décision (risque α = %s) : p-value ≥ α → H0 non rejetée ; p-value < α → H0 rejetée au profit de H1.", alpha_txt())
+# Phrase de décision : « ok » quand H0 n'est pas rejetée, « ko » quand elle l'est.
+decision <- function(pv, ok, ko) {
+  if (length(pv) != 1 || is.na(pv)) return("Décision : non calculable.")
+  rej <- pv < ALPHA
+  sprintf("Décision : p-value %s %s α (%s) → H0 %s : %s", fmt_p(pv), if (rej) "<" else "≥", alpha_txt(),
+          if (rej) "rejetée" else "non rejetée", if (rej) ko else ok)
 }
 ECH <- 1   # échelle de rendu des figures (1 = taille de base) ; fixée par params.json
+PREFIXE <- ""        # préfixe des fichiers PNG (analyse par groupe : g1_, g2_, ...)
+ETIQ_GROUPE <- ""    # étiquette du groupe en cours (« Centre = Est »), inscrite en haut de chaque figure
 lire_png <- function(nom, largeur = 900, hauteur = 600) {
+  nom <- paste0(PREFIXE, nom)
   chemin <- file.path(sortie, nom)
-  l <- round(largeur * ECH); h <- round(hauteur * ECH); r <- 110 * ECH
+  bandeau <- if (nzchar(ETIQ_GROUPE)) 38 else 0           # bandeau supplémentaire pour l'étiquette du groupe
+  l <- round(largeur * ECH); h <- round((hauteur + bandeau) * ECH); r <- 110 * ECH
   if (isTRUE(capabilities("cairo"))) png(chemin, width = l, height = h, res = r, type = "cairo")
   else png(chemin, width = l, height = h, res = r)
+  if (nzchar(ETIQ_GROUPE)) par(oma = c(0, 0, 2.4, 0))
   nom
+}
+# Les commandes ferment leurs figures par dev.off() : on y inscrit l'étiquette du groupe avant la fermeture.
+dev.off <- function(which = grDevices::dev.cur()) {
+  if (nzchar(ETIQ_GROUPE) && which > 1)
+    try(graphics::mtext(ETIQ_GROUPE, side = 3, outer = TRUE, line = 0.3, adj = 0, font = 2, cex = 1.05, col = "#b03030"), silent = TRUE)
+  grDevices::dev.off(which)
+}
+# Étiquettes d'une colonne d'ordre : dates ISO (AAAA-MM-JJ [hh:mm[:ss]]) écrites jj/mm/aaaa [hh:mm].
+etiq_ordre <- function(v) {
+  v <- as.character(v)
+  iso <- grepl("^\\d{4}-\\d{2}-\\d{2}", v)
+  if (length(v) && all(iso | is.na(v))) {
+    a <- substr(v, 1, 10); h <- ifelse(nchar(v) >= 16, substr(v, 12, 16), "")
+    out <- paste0(substr(a, 9, 10), "/", substr(a, 6, 7), "/", substr(a, 1, 4), ifelse(nzchar(h), paste0(" ", h), ""))
+    out[is.na(v)] <- NA_character_
+    return(out)
+  }
+  v
 }
 sans_na <- function(v) v[is.finite(v)]
 
@@ -98,7 +133,7 @@ lignes_stat <- function(d, cols) {
 # -- commandes -------------------------------------------------------------------
 cmd_descriptif <- function(d, p) {
   cols <- noms_numeriques(d, unlist(p$colonnes))
-  tab <- resume_multi_series(d[, cols, drop = FALSE])
+  tab <- resume_multi_series(d[, cols, drop = FALSE], alpha = ALPHA)
   k <- length(cols)
   series <- lapply(cols, function(nm) sans_na(d[[nm]]))
   names(series) <- cols
@@ -119,46 +154,164 @@ cmd_descriptif <- function(d, p) {
 
   tab_aff <- tab[, setdiff(names(tab), "Interpretation_normalite"), drop = FALSE]
   pn <- tab$P_Shapiro_Wilk
-  rej <- tab$Serie[!is.na(pn) & pn < 0.05]
-  nrej <- tab$Serie[!is.na(pn) & pn >= 0.05]
+  rej <- tab$Serie[!is.na(pn) & pn < ALPHA]
+  nrej <- tab$Serie[!is.na(pn) & pn >= ALPHA]
   list(titre = "Statistiques descriptives",
        conclusion = paste0(k, " série(s) décrite(s).",
-                           if (length(rej)) paste0(" Normalité rejetée au seuil de 5 % : ", paste(rej, collapse = ", "), ".") else "",
-                           if (length(nrej)) paste0(" Normalité non rejetée : ", paste(nrej, collapse = ", "), ".") else ""),
+                           if (length(rej)) paste0(" Normalité rejetée (p-value < α = ", alpha_txt(), ") : ", paste(rej, collapse = ", "), ".") else "",
+                           if (length(nrej)) paste0(" Normalité retenue (p-value ≥ α) : ", paste(nrej, collapse = ", "), ".") else ""),
        lignes = c(sprintf("%d série(s) numérique(s) analysée(s).", k),
+                  "Test de normalité de Shapiro-Wilk — H0 : la série suit une loi normale ; H1 : elle ne suit pas une loi normale.",
+                  regle(),
                   paste0(tab$Serie, " — Shapiro-Wilk : ", tab$Interpretation_normalite)),
        tables = list(Descriptif = tab_aff), figures = c(fig1, fig2),
        avertissements = list())
 }
 
-cmd_normalite <- function(d, p) {
-  nom <- nom_colonne(d, p$colonne, "Colonne")
-  x <- sans_na(col_num(d, nom))
+# -- tests de normalité (implémentés ici : aucun package supplémentaire n'est requis) ------------------------
+TESTS_NORMALITE <- c(sw = "Shapiro-Wilk", ad = "Anderson-Darling", lf = "Kolmogorov-Smirnov (Lilliefors)",
+                     cvm = "Cramér-von Mises", jb = "Jarque-Bera", rj = "Ryan-Joiner")
+
+tn_sw <- function(x) {
   n <- length(x)
-  if (n < 3) stop("Il faut au moins 3 valeurs valides.", call. = FALSE)
-  W <- NA_real_; pv <- NA_real_
-  if (n <= 5000 && stats::sd(x) > 0) {
-    sw <- tryCatch(stats::shapiro.test(x), error = function(e) NULL)
-    if (!is.null(sw)) { W <- unname(sw$statistic); pv <- sw$p.value }
+  if (n < 3 || n > 5000 || stats::sd(x) == 0) return(c(NA_real_, NA_real_))
+  sw <- tryCatch(stats::shapiro.test(x), error = function(e) NULL)
+  if (is.null(sw)) c(NA_real_, NA_real_) else c(unname(sw$statistic), sw$p.value)
+}
+tn_probas <- function(x) {
+  p <- stats::pnorm((sort(x) - mean(x)) / stats::sd(x))
+  pmin(pmax(p, 1e-12), 1 - 1e-12)
+}
+tn_ad <- function(x) {                       # Anderson-Darling, p-value : approximation de Stephens (1986)
+  n <- length(x)
+  if (n < 8 || stats::sd(x) == 0) return(c(NA_real_, NA_real_))
+  p <- tn_probas(x); i <- seq_len(n)
+  A <- -n - mean((2 * i - 1) * (log(p) + log(1 - rev(p))))
+  AA <- (1 + 0.75 / n + 2.25 / n^2) * A
+  pv <- if (AA < 0.2) 1 - exp(-13.436 + 101.14 * AA - 223.73 * AA^2)
+        else if (AA < 0.34) 1 - exp(-8.318 + 42.796 * AA - 59.938 * AA^2)
+        else if (AA < 0.6) exp(0.9177 - 4.279 * AA - 1.38 * AA^2)
+        else if (AA < 10) exp(1.2937 - 5.709 * AA + 0.0186 * AA^2)
+        else 3.7e-24
+  c(A, min(1, max(0, pv)))
+}
+tn_cvm <- function(x) {                      # Cramér-von Mises, p-value : approximation de Stephens (1986)
+  n <- length(x)
+  if (n < 8 || stats::sd(x) == 0) return(c(NA_real_, NA_real_))
+  p <- tn_probas(x); i <- seq_len(n)
+  W <- 1 / (12 * n) + sum((p - (2 * i - 1) / (2 * n))^2)
+  WW <- (1 + 0.5 / n) * W
+  pv <- if (WW < 0.0275) 1 - exp(-13.953 + 775.5 * WW - 12542.61 * WW^2)
+        else if (WW < 0.051) 1 - exp(-5.903 + 179.546 * WW - 1515.29 * WW^2)
+        else if (WW < 0.092) exp(0.886 - 31.62 * WW + 10.897 * WW^2)
+        else if (WW < 1.1) exp(1.111 - 34.242 * WW + 12.832 * WW^2)
+        else 7.37e-10
+  c(W, min(1, max(0, pv)))
+}
+tn_lf <- function(x) {                       # Kolmogorov-Smirnov avec correction de Lilliefors (paramètres estimés)
+  n <- length(x)
+  if (n < 5 || stats::sd(x) == 0) return(c(NA_real_, NA_real_))
+  p <- tn_probas(x); i <- seq_len(n)
+  D <- max(max(i / n - p), max(p - (i - 1) / n))
+  Kd <- D; nd <- n
+  if (n > 100) { Kd <- D * (n / 100)^0.49; nd <- 100 }
+  pv <- exp(-7.01256 * Kd^2 * (nd + 2.78019) + 2.99587 * Kd * sqrt(nd + 2.78019) - 0.122119 + 0.974598 / sqrt(nd) + 1.67997 / nd)
+  if (pv > 0.1) {
+    kk <- (sqrt(n) - 0.01 + 0.85 / sqrt(n)) * D
+    pv <- if (kk <= 0.302) 1
+          else if (kk <= 0.5) 2.76773 - 19.828315 * kk + 80.709644 * kk^2 - 138.55152 * kk^3 + 81.218052 * kk^4
+          else if (kk <= 0.9) -4.901232 + 40.662806 * kk - 97.490286 * kk^2 + 94.029866 * kk^3 - 32.355711 * kk^4
+          else if (kk <= 1.31) 6.198765 - 19.558097 * kk + 23.186922 * kk^2 - 12.234627 * kk^3 + 2.423045 * kk^4
+          else 0
   }
-  concl <- if (is.na(pv)) "Test non calculable (n > 5000, données constantes ou trop peu de valeurs distinctes)."
-           else if (pv < 0.05) "La normalité est rejetée au seuil de 5 %."
-           else "La normalité n'est pas rejetée au seuil de 5 %."
-  fig <- lire_png("normalite.png", largeur = 1000, hauteur = 480)
-  par(mfrow = c(1, 2), mar = c(4.5, 4.5, 3, 1))
-  hist(x, freq = FALSE, main = paste("Distribution :", nom), xlab = "Mesure", ylab = "Densité", col = "#cfe0f5", border = "white")
-  if (stats::sd(x) > 0) curve(dnorm(x, mean(x), stats::sd(x)), add = TRUE, lwd = 2, col = "#b03030")
-  qqnorm(x, main = "Droite de Henry (QQ-plot normal)", xlab = "Quantiles théoriques", ylab = "Quantiles observés", pch = 19, col = "#2a5d9f")
-  qqline(x, col = "#b03030", lwd = 2)
-  invisible(dev.off())
-  list(titre = paste("Test de normalité de Shapiro-Wilk —", nom),
-       lignes = c(sprintf("Effectif : %d", n), sprintf("Statistique W : %s", fmt(W)),
-                  sprintf("p-value : %s", fmt_p(pv)), concl),
-       conclusion = sprintf("« %s » — p-value %s. %s", nom, fmt_p(pv), concl),
-       tables = list(), figures = c(fig),
-       avertissements = if (!is.na(pv) && pv < 0.05)
-         list("Un rejet peut venir d'un petit écart sans importance pratique, surtout avec un grand effectif : examiner aussi le graphique.")
-       else list())
+  c(D, min(1, max(0, pv)))
+}
+tn_jb <- function(x) {                       # Jarque-Bera (loi asymptotique du khi² à 2 ddl : prudence si n est petit)
+  n <- length(x)
+  if (n < 8 || stats::sd(x) == 0) return(c(NA_real_, NA_real_))
+  m <- x - mean(x); s2 <- mean(m^2)
+  S <- mean(m^3) / s2^1.5; K <- mean(m^4) / s2^2
+  JB <- n / 6 * (S^2 + (K - 3)^2 / 4)
+  c(JB, stats::pchisq(JB, 2, lower.tail = FALSE))
+}
+tn_rj <- function(x) {                       # Ryan-Joiner : r = corrélation entre les données ordonnées et les scores normaux (Blom) ;
+  n <- length(x)                             # p-value par simulation (la loi de r sous H0 ne dépend que de n)
+  if (n < 5 || stats::sd(x) == 0) return(c(NA_real_, NA_real_))
+  sc <- stats::qnorm((seq_len(n) - 0.375) / (n + 0.25))
+  r <- stats::cor(sort(x), sc)
+  nsim <- as.integer(min(10000, max(2000, 3e6 / n)))
+  graine <- if (exists(".Random.seed", envir = globalenv())) get(".Random.seed", envir = globalenv()) else NULL
+  on.exit(if (!is.null(graine)) assign(".Random.seed", graine, envir = globalenv()), add = TRUE)
+  set.seed(20240601 + n)
+  rs <- replicate(nsim, stats::cor(sort(stats::rnorm(n)), sc))
+  c(r, (1 + sum(rs <= r)) / (nsim + 1))
+}
+tn_calcul <- function(id, x) switch(id, rj = tn_rj(x), sw = tn_sw(x), ad = tn_ad(x), lf = tn_lf(x), cvm = tn_cvm(x), jb = tn_jb(x))
+
+cmd_normalite <- function(d, p) {
+  voulus <- unlist(p$colonnes)
+  if (!length(voulus)) voulus <- p$colonne
+  if (is.null(voulus) || !length(voulus)) stop("Choisir au moins une série.", call. = FALSE)
+  ids <- intersect(unlist(p$tests), names(TESTS_NORMALITE))
+  if (!length(ids)) ids <- "sw"
+  cols <- noms_numeriques(d, voulus)
+  lignes <- character(0); figs <- character(0); ecartees <- character(0)
+  tab <- data.frame(Serie = character(0), Test = character(0), Statistique = numeric(0), p_value = numeric(0),
+                    Decision = character(0), stringsAsFactors = FALSE)
+  par_serie <- list()
+  for (nom in cols) {
+    x <- sans_na(col_num(d, nom))
+    n <- length(x)
+    if (n < 3) { ecartees <- c(ecartees, nom); next }
+    rejets <- character(0); gardes <- character(0); non_calc <- character(0)
+    for (id in ids) {
+      r <- tn_calcul(id, x)
+      tab[nrow(tab) + 1, ] <- list(nom, TESTS_NORMALITE[[id]], r[1], r[2],
+                                   if (is.na(r[2])) "non calculable" else if (r[2] < ALPHA) "H0 rejetée : normalité rejetée" else "H0 non rejetée : normalité retenue")
+      if (is.na(r[2])) non_calc <- c(non_calc, TESTS_NORMALITE[[id]])
+      else if (r[2] < ALPHA) rejets <- c(rejets, TESTS_NORMALITE[[id]])
+      else gardes <- c(gardes, TESTS_NORMALITE[[id]])
+      lignes <- c(lignes, sprintf("%s — %s (n = %d) : %s = %s ; p-value %s", nom, TESTS_NORMALITE[[id]], n,
+                                  if (id == "sw") "W" else if (id == "ad") "A²" else if (id == "lf") "D" else if (id == "cvm") "W²" else if (id == "rj") "RJ" else "JB",
+                                  fmt(r[1]), fmt_p(r[2])))
+      lignes[length(lignes)] <- paste0(lignes[length(lignes)], if (is.na(r[2])) "" else if (r[2] < ALPHA) " < α → normalité rejetée" else " ≥ α → normalité retenue")
+    }
+    par_serie[[nom]] <- list(rejets = rejets, gardes = gardes, non_calc = non_calc, n = n)
+    fig <- lire_png(sprintf("normalite_%d.png", length(par_serie)), largeur = 1000, hauteur = 480)
+    par(mfrow = c(1, 2), mar = c(4.5, 4.5, 3, 1))
+    h <- hist(x, plot = FALSE); sx <- stats::sd(x)
+    yh <- max(h$density, if (sx > 0) dnorm(mean(x), mean(x), sx), na.rm = TRUE)       # la courbe normale doit tenir dans le cadre
+    hist(x, freq = FALSE, main = paste("Distribution :", nom), xlab = "Mesure", ylab = "Densité", col = "#cfe0f5", border = "white",
+         breaks = h$breaks, ylim = c(0, yh * 1.1))
+    if (sx > 0) curve(dnorm(x, mean(x), sx), add = TRUE, lwd = 2, col = "#b03030")
+    qqnorm(x, main = paste("Droite de Henry :", nom), xlab = "Quantiles théoriques", ylab = "Quantiles observés", pch = 19, col = "#2a5d9f")
+    qqline(x, col = "#b03030", lwd = 2)
+    invisible(dev.off())
+    figs <- c(figs, fig)
+  }
+  if (!length(par_serie)) stop("Il faut au moins 3 valeurs valides par série.", call. = FALSE)
+  verdict <- function(nom) {
+    r <- par_serie[[nom]]
+    if (length(r$rejets) + length(r$gardes) == 0) return("test non calculable (effectif insuffisant, données constantes ou n > 5000 pour Shapiro-Wilk).")
+    if (!length(r$rejets)) return(if (length(ids) == 1) sprintf("p-value ≥ α (%s) : H0 non rejetée, la normalité est retenue.", alpha_txt()) else sprintf("p-value ≥ α (%s) pour tous les tests : H0 non rejetée, la normalité est retenue.", alpha_txt()))
+    if (!length(r$gardes)) return(if (length(ids) == 1) sprintf("p-value < α (%s) : H0 rejetée, la normalité est rejetée.", alpha_txt()) else sprintf("p-value < α (%s) pour tous les tests : H0 rejetée, la normalité est rejetée.", alpha_txt()))
+    paste0("avis partagés — rejetée par : ", paste(r$rejets, collapse = ", "), " ; non rejetée par : ", paste(r$gardes, collapse = ", "), ".")
+  }
+  noms <- names(par_serie)
+  une <- length(noms) == 1
+  lignes <- c("H0 : la série suit une loi normale ; H1 : elle ne suit pas une loi normale (quel que soit le test).", regle(),
+              "Pour valider la normalité, il faut que la p-value soit supérieure ou égale à α.", "", lignes)
+  concl <- if (une) paste0("« ", noms, " » : ", verdict(noms))
+           else paste0(length(noms), " série(s) testée(s). ", paste0(noms, " : ", vapply(noms, verdict, ""), collapse = " "))
+  avert <- list()
+  if (any(vapply(par_serie, function(r) length(r$rejets) > 0, logical(1))))
+    avert <- c(avert, list("Un rejet peut venir d'un petit écart sans importance pratique, surtout avec un grand effectif : examiner aussi les graphiques."))
+  if (length(ids) > 1) avert <- c(avert, list("Les tests n'ont pas tous la même sensibilité (Shapiro-Wilk et Anderson-Darling sont réputés les plus puissants ; Kolmogorov-Smirnov avec correction de Lilliefors l'est moins ; Ryan-Joiner, proche de Shapiro-Francia, est le test proposé par Minitab ; Jarque-Bera repose sur une loi asymptotique, à éviter avec peu de données) : des avis partagés sont possibles."))
+  if (length(ecartees)) avert <- c(avert, list(paste0("Série(s) ignorée(s) faute d'au moins 3 valeurs valides : ", paste(ecartees, collapse = ", "), ".")))
+  list(titre = if (une && length(ids) == 1) paste0("Test de normalité (", TESTS_NORMALITE[[ids]], ") — ", noms)
+               else if (une) paste("Tests de normalité —", noms) else "Tests de normalité",
+       lignes = lignes, conclusion = concl,
+       tables = list(Normalite = tab), figures = figs, avertissements = avert)
 }
 
 cohen_d <- function(x, y = NULL, mu = 0, paired = FALSE) {
@@ -178,7 +331,7 @@ cmd_t <- function(d, p) {
   paired <- vrai(p$apparie)
   alt <- p$alternative %||% "two.sided"
   mu <- num(p$mu); if (is.na(mu)) mu <- 0
-  res <- test_t(x, y, mu = mu, paired = paired && !is.null(y), alternative = alt, var_equal = vrai(p$variances_egales))
+  res <- test_t(x, y, mu = mu, paired = paired && !is.null(y), alternative = alt, var_equal = vrai(p$variances_egales), conf_level = 1 - ALPHA)
 
   if (is.null(y)) {
     xc <- sans_na(x)
@@ -187,6 +340,9 @@ cmd_t <- function(d, p) {
     hyp <- switch(alt, two.sided = sprintf("H1 : la moyenne de « %s » diffère de %s.", xn, fmt(mu)),
                   greater = sprintf("H1 : la moyenne de « %s » est supérieure à %s.", xn, fmt(mu)),
                   less = sprintf("H1 : la moyenne de « %s » est inférieure à %s.", xn, fmt(mu)))
+    h0 <- switch(alt, two.sided = sprintf("H0 : la moyenne de « %s » est égale à %s.", xn, fmt(mu)),
+                 greater = sprintf("H0 : la moyenne de « %s » est inférieure ou égale à %s.", xn, fmt(mu)),
+                 less = sprintf("H0 : la moyenne de « %s » est supérieure ou égale à %s.", xn, fmt(mu)))
     tab <- lignes_stat(d, xn)
   } else {
     if (paired) { ok <- is.finite(x) & is.finite(y); xc <- x[ok]; yc <- y[ok]
@@ -196,6 +352,9 @@ cmd_t <- function(d, p) {
     hyp <- switch(alt, two.sided = sprintf("H1 : les moyennes de « %s » et « %s » diffèrent.", xn, yn),
                   greater = sprintf("H1 : la moyenne de « %s » est supérieure à celle de « %s ».", xn, yn),
                   less = sprintf("H1 : la moyenne de « %s » est inférieure à celle de « %s ».", xn, yn))
+    h0 <- switch(alt, two.sided = sprintf("H0 : les moyennes de « %s » et « %s » sont égales.", xn, yn),
+                 greater = sprintf("H0 : la moyenne de « %s » est inférieure ou égale à celle de « %s ».", xn, yn),
+                 less = sprintf("H0 : la moyenne de « %s » est supérieure ou égale à celle de « %s ».", xn, yn))
     tab <- lignes_stat(d, cols)
     if (paired) tab$n <- length(xc)
   }
@@ -209,12 +368,13 @@ cmd_t <- function(d, p) {
   ic <- res$intervalle_confiance
   avert <- list("Vérifier l'indépendance des observations et la forme des distributions (voir le test de normalité). Une différence significative n'est pas forcément importante en pratique : considérer aussi la taille d'effet.")
   if (!is.null(y) && !paired && !vrai(p$variances_egales)) avert <- c(avert, list("Test de Welch : ne suppose pas l'égalité des variances."))
+  dec_t <- decision(res$p_value, "aucune différence n'est mise en évidence.", "la différence est statistiquement significative.")
   list(titre = paste("Test t —", res$type),
-       lignes = c(hyp, sprintf("Statistique t : %s", fmt(res$statistic)), sprintf("Degrés de liberté : %s", fmt(res$ddl)),
+       lignes = c(h0, hyp, regle(), sprintf("Statistique t : %s", fmt(res$statistic)), sprintf("Degrés de liberté : %s", fmt(res$ddl)),
                   sprintf("p-value : %s", fmt_p(res$p_value)),
-                  sprintf("Intervalle de confiance à 95 %% : [%s ; %s]", fmt(ic[1]), fmt(ic[2])),
-                  sprintf("Taille d'effet (d de Cohen) : %s", fmt(d_c, 4)), res$conclusion_5pct),
-       conclusion = sprintf("%s (p-value %s ; d de Cohen %s).", sub("\\.$", "", res$conclusion_5pct), fmt_p(res$p_value), fmt(d_c, 3)),
+                  sprintf("Intervalle de confiance à %s : [%s ; %s]", conf_txt(), fmt(ic[1]), fmt(ic[2])),
+                  sprintf("Taille d'effet (d de Cohen) : %s", fmt(d_c, 4)), dec_t),
+       conclusion = sprintf("%s (d de Cohen %s)", sub("^Décision : ", "", sub("\\.$", "", dec_t)), fmt(d_c, 3)),
        tables = list(Series = tab), figures = c(fig), avertissements = avert)
 }
 
@@ -252,18 +412,52 @@ cmd_anova <- function(d, p) {
   r <- stats::residuals(fit)
   if (length(r) >= 3 && length(r) <= 5000 && stats::sd(r) > 0) res_sw <- tryCatch(stats::shapiro.test(r)$p.value, error = function(e) NA_real_)
   fl <- tryCatch(stats::fligner.test(valeur ~ groupe, data = dd)$p.value, error = function(e) NA_real_)
-
-  tables <- list(ANOVA = tab_df, Groupes = moy)
-  lignes <- c(sprintf("Nombre de groupes : %d — observations : %d", nlevels(dd$groupe), nrow(dd)),
-              sprintf("F = %s — p-value : %s", fmt(tab[["F value"]][1]), fmt_p(pv)),
-              if (is.na(pv)) "Résultat non calculable."
-              else if (pv < 0.05) "Au moins une moyenne de groupe diffère statistiquement (seuil 5 %)."
-              else "Aucune différence de moyenne n'est mise en évidence au seuil de 5 %.",
-              sprintf("Contrôle des résidus — Shapiro-Wilk : p = %s ; homogénéité des variances (Fligner-Killeen) : p = %s",
-                      fmt_p(res_sw), fmt_p(fl)))
+  lev <- if (AVANCEES) levene_bf(dd$valeur, dd$groupe) else c(stat = NA_real_, ddl1 = NA_real_, ddl2 = NA_real_, p = NA_real_)
+  wl <- tryCatch(stats::oneway.test(valeur ~ groupe, data = dd, var.equal = FALSE), error = function(e) NULL)
+  kw <- tryCatch(stats::kruskal.test(valeur ~ groupe, data = dd), error = function(e) NULL)
+  ss <- tab[["Sum Sq"]]; eta2 <- ss[1] / sum(ss)
+  comp <- data.frame(Test = c("ANOVA de Welch (variances inégales)", "Kruskal-Wallis (non paramétrique)",
+                              "Levene — homogénéité des variances", "Fligner-Killeen — homogénéité des variances",
+                              "Shapiro-Wilk — normalité des résidus"),
+                     Statistique = c(if (is.null(wl)) NA_real_ else unname(wl$statistic), if (is.null(kw)) NA_real_ else unname(kw$statistic),
+                                     unname(lev["stat"]), NA_real_, NA_real_),
+                     ddl = c(if (is.null(wl)) NA_character_ else sprintf("%s ; %s", fmt(unname(wl$parameter[1]), 4), fmt(unname(wl$parameter[2]), 4)),
+                             if (is.null(kw)) NA_character_ else as.character(unname(kw$parameter)),
+                             if (is.na(lev["ddl1"])) NA_character_ else sprintf("%d ; %d", as.integer(lev["ddl1"]), as.integer(lev["ddl2"])),
+                             NA_character_, NA_character_),
+                     p_value = c(if (is.null(wl)) NA_real_ else wl$p.value, if (is.null(kw)) NA_real_ else kw$p.value,
+                                 unname(lev["p"]), fl, res_sw), stringsAsFactors = FALSE)
+  d_ok <- function(pv, ok, ko) if (is.na(pv)) "non calculable" else if (pv < ALPHA) ko else ok
+  comp$Decision <- c(d_ok(comp$p_value[1], "moyennes non différentes", "moyennes différentes"),
+                     d_ok(comp$p_value[2], "distributions non différentes", "distributions différentes"),
+                     d_ok(comp$p_value[3], "variances homogènes (H0 retenue)", "variances différentes (H0 rejetée)"),
+                     d_ok(comp$p_value[4], "variances homogènes (H0 retenue)", "variances différentes (H0 rejetée)"),
+                     d_ok(comp$p_value[5], "normalité retenue (H0 non rejetée)", "normalité rejetée (H0 rejetée)"))
+  tables <- list(ANOVA = tab_df, Groupes = moy, `Tests complémentaires` = comp)
+  lignes <- c("H0 : toutes les moyennes de groupe sont égales ; H1 : au moins une moyenne diffère.",
+              sprintf("Nombre de groupes : %d — observations : %d", nlevels(dd$groupe), nrow(dd)),
+              sprintf("F = %s — p-value : %s", fmt(tab[["F value"]][1], 5), fmt_p(pv)),
+              regle(),
+              decision(pv, "aucune différence de moyenne n'est mise en évidence.", "au moins une moyenne de groupe diffère statistiquement."),
+              sprintf("Taille d'effet : η² = %s (part de la variance expliquée par le facteur)", fmt(eta2, 3)),
+              sprintf("Contrôle des résidus — Shapiro-Wilk : p = %s ; homogénéité des variances — Levene : p = %s, Fligner-Killeen : p = %s",
+                      fmt_p(res_sw), fmt_p(unname(lev["p"])), fmt_p(fl)),
+              sprintf("Pour ces trois contrôles, H0 est l'hypothèse requise (normalité des résidus ; variances égales) : elle est retenue si p-value ≥ α = %s.", alpha_txt()))
   avert <- list("Vérifier l'indépendance, la normalité approximative des résidus et l'homogénéité des variances.")
-  if (!is.na(pv) && pv < 0.05 && nlevels(dd$groupe) >= 2) {
-    tk <- tryCatch(stats::TukeyHSD(fit)$groupe, error = function(e) NULL)
+  var_inegales <- !is.na(lev["p"]) && lev["p"] < ALPHA
+  if (var_inegales && !is.null(wl)) {
+    lignes <- c(lignes, sprintf("Les variances diffèrent (Levene) : se référer à l'ANOVA de Welch — F = %s, p-value %s.", fmt(unname(wl$statistic), 5), fmt_p(wl$p.value)))
+    pw <- tryCatch(stats::pairwise.t.test(dd$valeur, dd$groupe, pool.sd = FALSE, p.adjust.method = "holm"), error = function(e) NULL)
+    if (!is.null(pw) && !is.na(wl$p.value) && wl$p.value < ALPHA) {
+      m <- pw$p.value
+      pairs <- which(!is.na(m), arr.ind = TRUE)
+      tables$`Comparaisons deux à deux (Welch, Holm)` <- data.frame(Comparaison = sprintf("%s - %s", colnames(m)[pairs[, 2]], rownames(m)[pairs[, 1]]),
+                                                                    p_ajustee = m[pairs], stringsAsFactors = FALSE)
+      avert <- c(avert, list("Variances inégales : comparaisons deux à deux par tests de Welch avec ajustement de Holm (le test de Tukey suppose des variances égales)."))
+    }
+  }
+  if (!is.na(pv) && pv < ALPHA && nlevels(dd$groupe) >= 2) {
+    tk <- tryCatch(stats::TukeyHSD(fit, conf.level = 1 - ALPHA)$groupe, error = function(e) NULL)
     if (!is.null(tk)) {
       tables$Tukey <- data.frame(Comparaison = rownames(tk), Ecart = tk[, "diff"], Borne_inf = tk[, "lwr"],
                                  Borne_sup = tk[, "upr"], p_ajustee = tk[, "p adj"], stringsAsFactors = FALSE)
@@ -276,12 +470,22 @@ cmd_anova <- function(d, p) {
   boxplot(valeur ~ groupe, data = dd, main = "Mesures par groupe", xlab = "Groupe", ylab = "Mesure", col = "#cfe0f5", las = if (nl > 6) 2 else 1)
   points(seq_len(nl), moy$Moyenne, pch = 18, cex = 1.6, col = "#b03030")
   invisible(dev.off())
+  fig2 <- lire_png("anova_intervalles.png", largeur = max(700, 110 * nl + 300), hauteur = 520)
+  par(mar = c(5, 4.5, 3, 1))
+  se <- moy$Ecart_type / sqrt(moy$n); tq <- stats::qt(1 - ALPHA / 2, pmax(moy$n - 1, 1))
+  bas <- moy$Moyenne - tq * se; haut <- moy$Moyenne + tq * se
+  ok <- is.finite(bas) & is.finite(haut)
+  yl <- range(c(bas[ok], haut[ok], moy$Moyenne), na.rm = TRUE)
+  plot(seq_len(nl), moy$Moyenne, ylim = yl, xlim = c(0.5, nl + 0.5), xaxt = "n", pch = 19, cex = 1.3, col = "#2a5d9f",
+       xlab = "Groupe", ylab = "Moyenne", main = paste0("Moyennes et intervalles de confiance à ", conf_txt()))
+  axis(1, at = seq_len(nl), labels = moy$Groupe, las = if (nl > 6) 2 else 1)
+  arrows(seq_len(nl)[ok], bas[ok], seq_len(nl)[ok], haut[ok], angle = 90, code = 3, length = 0.06, lwd = 2, col = "#2a5d9f")
+  abline(h = mean(dd$valeur), lty = 2, col = "#888888")
+  invisible(dev.off())
   list(titre = "ANOVA à un facteur", lignes = lignes,
-       conclusion = sprintf("F = %s, p-value %s. %s", fmt(tab[["F value"]][1], 4), fmt_p(pv),
-                            if (is.na(pv)) "Résultat non calculable."
-                            else if (pv < 0.05) "Au moins une moyenne de groupe diffère statistiquement (seuil 5 %)."
-                            else "Aucune différence de moyenne n'est mise en évidence au seuil de 5 %."),
-       tables = tables, figures = c(fig), avertissements = avert)
+       conclusion = sprintf("F = %s. %s", fmt(tab[["F value"]][1], 4),
+                            sub("^Décision : ", "", decision(pv, "aucune différence de moyenne n'est mise en évidence.", "au moins une moyenne de groupe diffère statistiquement."))),
+       tables = tables, figures = c(fig, fig2), avertissements = avert)
 }
 
 cmd_capabilite <- function(d, p) {
@@ -298,10 +502,13 @@ cmd_capabilite <- function(d, p) {
 
   fig <- lire_png("capabilite.png", largeur = 900, hauteur = 560)
   par(mar = c(5, 4.5, 3, 1))
-  hist(x, freq = FALSE, main = paste("Distribution :", nom), xlab = "Mesure", ylab = "Densité", col = "#cfe0f5", border = "white",
-       xlim = range(c(x, lsl, usl, cible), na.rm = TRUE))
   s <- stats::sd(x)
-  if (s > 0) curve(dnorm(x, mean(x), s), add = TRUE, lwd = 2, col = "#2a5d9f")
+  h <- hist(x, plot = FALSE)
+  xl <- range(c(x, lsl, usl, cible, if (s > 0) mean(x) + c(-3.5, 3.5) * s), na.rm = TRUE)     # la courbe normale doit tenir dans le cadre
+  yh <- max(h$density, if (s > 0) dnorm(mean(x), mean(x), s), na.rm = TRUE)
+  hist(x, freq = FALSE, main = paste("Distribution :", nom), xlab = "Mesure", ylab = "Densité", col = "#cfe0f5", border = "white",
+       xlim = xl, ylim = c(0, yh * 1.3), breaks = h$breaks)
+  if (s > 0) curve(dnorm(x, mean(x), s), from = xl[1], to = xl[2], n = 400, add = TRUE, lwd = 2, col = "#2a5d9f")
   if (!is.na(lsl)) abline(v = lsl, lty = 2, lwd = 2, col = "#b03030")
   if (!is.na(usl)) abline(v = usl, lty = 2, lwd = 2, col = "#b03030")
   if (!is.na(cible)) abline(v = cible, lty = 3, lwd = 2, col = "#2e8b57")
@@ -430,18 +637,75 @@ cmd_kappa <- function(d, p) {
        avertissements = list(r$note, "La valeur du Kappa dépend de la prévalence des catégories : examiner aussi la matrice et l'accord observé."))
 }
 
+# -- commandes avancées (fichier séparé) ------------------------------------------
+fichier_avance <- file.path(dossier_script, "commandes_avancees.R")
+AVANCEES <- file.exists(fichier_avance)
+if (AVANCEES) source(fichier_avance, local = TRUE, encoding = "UTF-8")
+avancee <- function(nom, d, p) {
+  if (!AVANCEES) stop("Le fichier commandes_avancees.R est introuvable dans le dossier du programme.", call. = FALSE)
+  get(nom, mode = "function")(d, p)
+}
+
 # -- exécution -------------------------------------------------------------------
+lancer_commande <- function(d, p) {
+  switch(p$commande,
+         descriptif = cmd_descriptif(d, p), normalite = cmd_normalite(d, p), t = cmd_t(d, p),
+         anova = cmd_anova(d, p), capabilite = cmd_capabilite(d, p), kappa = cmd_kappa(d, p),
+         ftest = avancee("cmd_ftest", d, p), khi2 = avancee("cmd_khi2", d, p),
+         carte = avancee("cmd_carte", d, p), rr1 = avancee("cmd_rr1", d, p),
+         rr_croisee = avancee("cmd_rr_croisee", d, p),
+         stop("Commande inconnue : ", p$commande, call. = FALSE))
+}
+
+# Analyse groupe par groupe : la colonne technique « __groupe__ » (écrite par l'application) donne le groupe de chaque ligne ;
+# la commande est lancée une fois par groupe retenu, et les résultats sont réunis (texte, tableaux, figures).
+lancer_par_groupes <- function(d, p) {
+  g <- as.character(d[["__groupe__"]])
+  vals <- as.character(unlist(p$groupes))
+  nom_g <- if (is.null(p$groupe_nom) || !nzchar(p$groupe_nom)) "Groupe" else p$groupe_nom
+  d0 <- d[, setdiff(names(d), "__groupe__"), drop = FALSE]
+  res <- list(); erreurs <- character(0); etiqs <- character(0)
+  for (i in seq_along(vals)) {
+    sel <- !is.na(g) & g == vals[i]
+    PREFIXE <<- sprintf("g%d_", i); ETIQ_GROUPE <<- sprintf("%s = %s", nom_g, vals[i])
+    r <- tryCatch(lancer_commande(d0[sel, , drop = FALSE], p), error = function(e) {
+      erreurs <<- c(erreurs, sprintf("Groupe « %s » : %s", vals[i], conditionMessage(e))); NULL })
+    while (grDevices::dev.cur() > 1) grDevices::dev.off()
+    if (!is.null(r)) { res[[length(res) + 1]] <- r; etiqs <- c(etiqs, vals[i]) }
+  }
+  PREFIXE <<- ""; ETIQ_GROUPE <<- ""
+  if (!length(res)) stop(paste(erreurs, collapse = " "), call. = FALSE)
+  tables <- list(); libres <- character(0)
+  lignes <- character(0); concl <- character(0); figs <- character(0); avert <- list()
+  for (i in seq_along(res)) {
+    r <- res[[i]]; lab <- etiqs[i]
+    lignes <- c(lignes, sprintf("══════ %s = %s ══════", nom_g, lab), r$lignes, "")
+    if (length(r$conclusion) && nzchar(r$conclusion)) concl <- c(concl, sprintf("[%s] %s", lab, r$conclusion))
+    for (nm in names(r$tables)) {
+      nn <- paste0(lab, " — ", nm)
+      tables[[nn]] <- r$tables[[nm]]
+      if (nm %in% unlist(r$tables_libres)) libres <- c(libres, nn)
+    }
+    figs <- c(figs, unlist(r$figures))
+    avert <- c(avert, unlist(r$avertissements))
+  }
+  avert <- c(as.list(unique(unlist(avert))), as.list(erreurs))
+  list(titre = paste0(res[[1]]$titre, " — par groupe (", nom_g, ")"), lignes = lignes,
+       conclusion = paste(concl, collapse = " "), tables = tables, tables_libres = libres,
+       figures = figs, avertissements = avert, groupes = etiqs)
+}
+
 principal <- function() {
   p <- jsonlite::fromJSON(file.path(sortie, "params.json"), simplifyVector = TRUE)
   e <- num(p$echelle)
   ECH <<- if (is.na(e)) 1 else max(1, min(2.5, e))
+  a <- num(p$alpha_test)
+  ALPHA <<- if (is.na(a) || a <= 0 || a >= 0.5) 0.05 else a
   d <- utils::read.csv(entree, header = TRUE, stringsAsFactors = FALSE, check.names = FALSE,
                        na.strings = c("", "NA", "NaN"), encoding = "UTF-8", fileEncoding = "UTF-8")
   if (!nrow(d)) stop("Aucune ligne de données.", call. = FALSE)
-  res <- switch(p$commande,
-                descriptif = cmd_descriptif(d, p), normalite = cmd_normalite(d, p), t = cmd_t(d, p),
-                anova = cmd_anova(d, p), capabilite = cmd_capabilite(d, p), kappa = cmd_kappa(d, p),
-                stop("Commande inconnue : ", p$commande, call. = FALSE))
+  res <- if ("__groupe__" %in% names(d) && length(unlist(p$groupes))) lancer_par_groupes(d, p)
+         else lancer_commande(d[, setdiff(names(d), "__groupe__"), drop = FALSE], p)
   res$ok <- TRUE
   res$commande <- p$commande
   ecrire(res)

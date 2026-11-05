@@ -16,27 +16,34 @@ Programme de statistiques du Pi 5, utilisable de 4 façons : application de bure
 
 ## Contenu du dossier
 
-| Fichier                        | Rôle                                                                                                                                               |
-|---                             |---                                                                                                                                                 |
-| `statistiques.py`              | Application de bureau (Tkinter) avec écran d'accueil ; contient aussi le cœur partagé avec le bot (lecture des données, appel de R, mise en forme) |
-| `telegram_bot_statistiques.py` | Bot Telegram (dans le dossier du bot)                                                                                                              |
-| `rapport_statistique.py`       | Rapport de synthèse PDF (reportlab), appelé par l'application de bureau                                                                            |
-| `cli_statistique.R`            | Passerelle en ligne de commande vers le moteur R (résultats JSON + graphiques PNG)                                                                 |
-| `moteur_statistique.R`         | Fonctions de calcul R réutilisables                                                                                                                |
-| `app.R`                        | Interface web Shiny, facultative (voir plus bas)                                                                                                   |
-| `Statistiques.desktop`         | Lanceur pour le bureau (non versionné : il reste sur le bureau du Pi)                                                                              |
-| `icons/6Sigma.png`             | Icône de l'écran d'accueil et du lanceur                                                                                                           |
+| Fichier                        | Rôle                                                                                                                                                   |
+|---                             |---                                                                                                                                                     |
+| `statistiques.py`              | Application de bureau (Tkinter) avec écran d'accueil ; contient aussi le cœur partagé avec le bot (lecture des données, appel de R, mise en forme)     |
+| `telegram_bot_statistiques.py` | Bot Telegram (dans le dossier du bot)                                                                                                                  |
+| `rapport_statistique.py`       | Rapport de synthèse PDF (reportlab), appelé par l'application de bureau                                                                                |
+| `cli_statistique.R`            | Passerelle en ligne de commande vers le moteur R (résultats JSON + graphiques PNG)                                                                     |
+| `commandes_avancees.R`         | Analyses avancées chargées par `cli_statistique.R` : test F, khi², cartes de contrôle, R&R                                                             |
+| `moteur_statistique.R`         | Fonctions de calcul R réutilisables                                                                                                                    |
+| `app.R`                        | Interface web Shiny, facultative (voir plus bas) ; elle appelle `cli_statistique.R` et `commandes_avancees.R`, qui doivent rester dans le même dossier |
+| `Statistiques.desktop`         | Lanceur pour le bureau (non versionné : il reste sur le bureau du Pi)                                                                                  |
+| `icons/6Sigma.png`             | Icône de l'écran d'accueil et du lanceur                                                                                                               |
 
 ## Fonctionnalités
 
 - **Données** : saisie ou collage de texte, ouverture d'un fichier `txt`, `csv`, `tsv`, `dat` ou `xlsx`, export CSV.
+- **Risque α et décision** : le risque α (0,05 par défaut) se règle en haut de la fenêtre (colonne de gauche dans l'interface web) et s'applique à tous les tests ; il est conservé dans les projets `.statproj`. Chaque résultat rappelle H0 et H1 et la règle de décision : **p-value ≥ α → H0 non rejetée ; p-value < α → H0 rejetée**. Pour la normalité (quel que soit le test), H0 est « la série suit une loi normale » : elle n'est validée que si la p-value est supérieure ou égale à α. Les intervalles de confiance des tests suivent le même risque (niveau 1 − α). Le seuil de l'interaction de la R&R croisée reste un réglage propre à cette analyse.
+- **Dates et groupes** : une colonne de dates (JJ/MM/AAAA ou AAAA-MM-JJ, avec ou sans heure, y compris dans un fichier `xlsx`) est reconnue comme un type « date », distinct du texte et du nombre. « Analyser par groupe » (en haut de la fenêtre ; colonne de gauche dans l'interface web) lance **chaque analyse groupe par groupe** pour les groupes retenus (colonne de texte, de nombres ou de dates regroupées par jour, mois ou année) : un bloc de résultats, des tableaux et des graphiques par groupe, avec le groupe inscrit sur chaque graphique. Pour les cartes de contrôle, « Ordre des données » trie les points par date et l'affiche sur l'axe.
 - **Statistiques descriptives** : effectif, moyenne, médiane, écart-type, variance, quartiles, extrêmes, Shapiro-Wilk, boîtes à moustaches, histogrammes.
-- **Normalité** : Shapiro-Wilk, histogramme avec courbe normale, droite de Henry.
-- **Tests t** : un échantillon, deux échantillons indépendants (Welch par défaut, variances égales en option), échantillons appariés ; hypothèse bilatérale ou unilatérale ; intervalle de confiance et taille d'effet (d de Cohen).
-- **ANOVA à un facteur** : colonnes = groupes ou format long (colonne de mesures + colonne de groupes) ; contrôle des résidus (Shapiro-Wilk) et de l'homogénéité des variances (Fligner-Killeen) ; comparaisons deux à deux de Tukey si le test global est significatif.
+- **Normalité** : au choix Shapiro-Wilk, Anderson-Darling, Kolmogorov-Smirnov (Lilliefors), Cramér-von Mises, Jarque-Bera, Ryan-Joiner (test de Minitab), sur une ou plusieurs séries à la fois ; pour chaque série, histogramme (courbe normale) et droite de Henry.
+- **Tests t (Student)** : un échantillon, deux échantillons indépendants (Welch par défaut, variances égales en option), échantillons appariés ; hypothèse bilatérale ou unilatérale ; intervalle de confiance et taille d'effet (d de Cohen).
+- **Test F** de comparaison de deux variances : rapport des variances, intervalle de confiance, hypothèse bilatérale ou unilatérale, test de Levene (plus robuste) et conseil sur le choix entre le test t de Student et celui de Welch (application de bureau).
+- **ANOVA à un facteur** : colonnes = groupes ou format long (colonne de mesures + colonne de groupes) ; taille d'effet η² ; contrôle des résidus (Shapiro-Wilk) et de l'homogénéité des variances (Levene, Fligner-Killeen) ; ANOVA de Welch et Kruskal-Wallis en alternative ; comparaisons deux à deux de Tukey si le test global est significatif, ou de Welch avec ajustement de Holm si les variances diffèrent ; graphique des moyennes et de leurs intervalles de confiance.
+- **Khi²** (application de bureau) : tests d'**indépendance**, d'**homogénéité** et de **conformité** (à une répartition attendue ou à une loi normale), à partir de données brutes (deux colonnes de catégories) ou d'un tableau d'effectifs déjà compté. Effectifs observés et théoriques, résidus standardisés, V de Cramér, profils des lignes, graphiques ; correction de Yates et test exact de Fisher pour un tableau 2 × 2 ou quand les effectifs théoriques sont trop petits. La conformité à la loi normale utilise des classes équiprobables (au moins 5 valeurs attendues par classe).
+- **Cartes de contrôle** (application de bureau) : X-barre/R, X-barre/S et valeurs individuelles/étendues mobiles (I-MR), avec choix automatique du type (valeurs seules : I-MR ; 2 à 7 valeurs par sous-groupe : X-barre/R ; 8 et plus : X-barre/S). Données en colonnes (une ligne par sous-groupe) ou en format long (colonne de mesures + colonne de sous-groupes) ; des sous-groupes de tailles différentes donnent des limites de contrôle variables. Limites calculées d'après les données à 3 écarts-types (constantes d2, d3 et c4 calculées exactement), 8 tests de causes spéciales (règles de Minitab / Nelson, 1 à 4 par défaut), écart-type intra-sous-groupe estimé réutilisable pour la capabilité.
+- **R&R** (application de bureau), conventions de **Minitab** par défaut, rappelées dans chaque résultat : **R&R croisée** (pièces × opérateurs × répétitions, plan équilibré, méthode ANOVA, interaction retirée si sa p-value dépasse 0,05 — la norme AIAG retient 0,25 —, variation d'étude sur 6 écarts-types, composantes de variance, % contribution, % variation d'étude, % tolérance, nombre de catégories distinctes, graphiques et cartes par opérateur) et **R&R de type 1** (une pièce étalon mesurée de nombreuses fois : biais et test t, Cg et Cgk avec K = 20 % de la tolérance et L = 6, seuil 1,33).
 - **Capabilité** : Pp/Ppk à partir de l'écart-type global ; Cp/Cpk/Cm/Cmk uniquement si un écart-type intra-sous-groupe est fourni ; PPM estimés ; histogramme avec limites de spécification.
-- **Kappa de Cohen** non pondéré, avec matrice de confusion, en deux modes : comparaison de deux évaluations, ou comparaison d'un ou plusieurs évaluateurs à une **colonne de référence (norme)** (application de bureau). Dans ce second mode : Kappa de chaque évaluateur contre la référence avec un verdict (satisfaisant, à améliorer, insuffisant), accord en % et intervalle de confiance, accord de tous les évaluateurs avec la référence, Kappa des évaluateurs deux à deux et graphique. Interprétation selon l'échelle de Landis et Koch (1977) ; repères AIAG (MSA) pour les systèmes de mesure : Kappa > 0,75 bon à excellent, Kappa < 0,40 insuffisant. Les références sont rappelées avec chaque résultat.
-- **Génération de données** (bouton « Générer des données… » de l'onglet Données) : variable aléatoire selon une loi normale (moyenne, écart-type) ou des valeurs uniformes (minimum, maximum), avec le nombre de valeurs, le nom de la variable, le nombre de décimales et une graine facultative pour retrouver le même tirage. La variable s'ajoute aux données chargées ou les remplace ; on peut en générer plusieurs à la suite.
+- **Kappa de Cohen** non pondéré, avec matrice de confusion, en trois modes : comparaison de deux évaluations, ou comparaison d'un ou plusieurs évaluateurs à une **colonne de référence (norme)**, avec une colonne par évaluateur ou avec des données en **format long** (une ligne par évaluation : réponse, évaluateur, échantillon, essai, référence ; application de bureau). Dans les modes avec référence : Kappa de chaque évaluateur contre la référence avec un verdict (satisfaisant, à améliorer, insuffisant), accord en % et intervalle de confiance, accord de tous les évaluateurs avec la référence, Kappa des évaluateurs deux à deux et graphique. Interprétation selon l'échelle de Landis et Koch (1977) ; repères AIAG (MSA) pour les systèmes de mesure : Kappa > 0,75 bon à excellent, Kappa < 0,40 insuffisant. Les références sont rappelées avec chaque résultat.
+- **Génération de données** (bouton « Générer des données… » de l'onglet Données) : variable aléatoire selon une loi normale (moyenne, écart-type) ou des valeurs uniformes (minimum, maximum), avec le nombre de valeurs, le nom de la variable, le nombre de décimales et une valeur d'initialisation facultative pour retrouver le même tirage. La variable s'ajoute aux données chargées ou les remplace ; on peut en générer plusieurs à la suite.
 - **Projet** (onglet Rapport) : journal de toutes les analyses calculées ; enregistrement des données, des résultats (texte, tableaux, graphiques) et des réglages des onglets dans un fichier `.statproj`, pour reprendre le travail plus tard.
 - **Rapport de synthèse PDF** (onglet Rapport) : titre, auteur, conclusions saisies, synthèse des analyses retenues (case à cocher dans le journal), description des données, puis détail de chaque analyse avec tableaux, graphiques et remarques.
 
@@ -85,7 +92,7 @@ Lanceur sur le bureau : créer `~/Desktop/Statistiques.desktop` avec le contenu 
 ```ini
 [Desktop Entry]
 Type=Application
-Name=Atelier statistique
+Name=Statistiques
 Exec=python3 /home/jfbrunet/Projects/Statistiques/statistiques.py
 Icon=/home/jfbrunet/Projects/Statistiques/icons/6Sigma.png
 Terminal=false
@@ -94,7 +101,7 @@ Categories=Education;Science;
 
 Selon le gestionnaire de fichiers, un clic droit sur l'icône puis « Autoriser le lancement » peut être nécessaire la première fois.
 
-Utilisation : onglet **Données** pour saisir/coller des données ou ouvrir un fichier, puis un onglet par analyse. La fenêtre s'ouvre agrandie ; le séparateur entre le texte des résultats et les graphiques se déplace à la souris, et un clic sur un graphique l'ouvre en grand. Chaque résultat peut être enregistré (texte, avec les graphiques PNG à côté). Les options de lecture (séparateur, décimale, ligne de noms de colonnes) sont en mode automatique par défaut et peuvent être forcées. L'onglet **Rapport** garde le journal des analyses, enregistre ou rouvre un projet et génère le rapport PDF ; il décrit les données actuellement chargées, chaque analyse portant sur les données au moment de son calcul.
+Utilisation : onglet **Données** pour saisir/coller des données ou ouvrir un fichier, puis un onglet par analyse. La fenêtre s'ouvre agrandie ; le séparateur entre le texte des résultats et les graphiques se déplace à la souris, et un clic sur un graphique l'ouvre en grand. Chaque résultat peut être enregistré (texte, avec les graphiques PNG à côté). Les options de lecture (séparateur, décimale, ligne de noms de colonnes) sont en mode automatique par défaut et peuvent être forcées. L'onglet **Rapport** garde le journal des analyses (double-clic ou « Revoir l'analyse sélectionnée » pour réafficher un résultat dans son onglet), enregistre ou rouvre un projet et génère le rapport PDF ; il décrit les données actuellement chargées, chaque analyse portant sur les données au moment de son calcul.
 
 Les fichiers `.R` sont appelés par `Rscript` : ils n'ont pas besoin du droit d'exécution (`chmod +x`), contrairement aux `.py` lancés directement.
 
@@ -169,23 +176,23 @@ sudo systemctl restart telegram-bot-statistiques   # après modification du bot 
 - **Analyser** : boutons du menu ou commandes ; les colonnes se désignent par leur numéro (affiché après le chargement et par `/etat`) ou par leur nom.
 - Les résultats arrivent en texte à chasse fixe, suivis des graphiques en images.
 
-| Commande                                                          | Rôle                                                                        |
-|---                                                                |---                                                                          |
-| `/donnees`, `/etat`                                               | Aide au chargement ; colonnes et effectifs                                  |
-| `/descriptif`                                                     | Statistiques descriptives                                                   |
-| `/normalite [colonne]`                                            | Test de normalité                                                           |
-| `/t [X] [Y ou 0] [welch\|apparie\|egales] [sup\|inf] [mu=valeur]` | Test t (`0` à la place de Y : un échantillon)                               |
-| `/anova [colonnes \| mesures groupes]`                            | ANOVA                                                                       |
-| `/capa [colonne] [LSL] [USL] [cible] [σ intra]`                   | Capabilité (`-` pour une valeur absente)                                    |
-| `/kappa [évaluation 1] [évaluation 2]`                            | Kappa de Cohen entre deux colonnes (mode référence : application de bureau) |
-| `/lecture`                                                        | Forcer séparateur, décimale, ligne de noms ; relit les données déjà reçues  |
-| `/export`, `/effacer`, `/annuler`                                 | Récupérer les données en CSV ; effacer ; annuler une saisie en attente      |
+| Commande                                                          | Rôle                                                                         |
+|---                                                                |---                                                                           |
+| `/donnees`, `/etat`                                               | Aide au chargement ; colonnes et effectifs                                   |
+| `/descriptif`                                                     | Statistiques descriptives                                                    |
+| `/normalite [colonne]`                                            | Test de normalité                                                            |
+| `/t [X] [Y ou 0] [welch\|apparie\|egales] [sup\|inf] [mu=valeur]` | Test t (`0` à la place de Y : un échantillon)                                |
+| `/anova [colonnes \| mesures groupes]`                            | ANOVA                                                                        |
+| `/capa [colonne] [LSL] [USL] [cible] [σ intra]`                   | Capabilité (`-` pour une valeur absente)                                     |
+| `/kappa [évaluation 1] [évaluation 2]`                            | Kappa de Cohen entre deux colonnes (mode référence : application de bureau)  |
+| `/lecture`                                                        | Forcer séparateur, décimale, ligne de noms ; relit les données déjà reçues   |
+| `/export`, `/effacer`, `/annuler`                                 | Récupérer les données en CSV ; effacer ; annuler une saisie en attente       |
 
 Les données d'une conversation ne sont conservées **qu'en mémoire du bot** : rien n'est écrit sur disque, et elles disparaissent à l'arrêt du bot.
 
 ## Interface web Shiny (à la demande)
 
-`app.R` propose une interface web adaptée au téléphone, avec sauvegarde SQLite des projets (dossier `data/`). Elle partage `moteur_statistique.R` avec le reste du projet. Elle n'est **pas** lancée automatiquement : on la démarre quand on en a besoin.
+`app.R` propose une interface web adaptée au téléphone, avec sauvegarde SQLite des projets (dossier `data/`). Elle partage `moteur_statistique.R` avec le reste du projet et confie les analyses avancées au même moteur que l'application de bureau (`cli_statistique.R` et `commandes_avancees.R`). Onglets : Données, Descriptif, Normalité, Tests t (Student/Welch), ANOVA, Test F, Khi² (indépendance, homogénéité, conformité, données brutes ou tableau d'effectifs), Cartes de contrôle (X-barre/R, X-barre/S, I-MR, limites variables), R&R (croisée et type 1, valeurs par défaut de Minitab), Capabilité, Kappa. Le package R `jsonlite` est requis. Toutes les analyses y passent par le moteur commun : elles peuvent être lancées groupe par groupe (les dates ne sont reconnues comme telles que dans l'application de bureau). Elle n'est **pas** lancée automatiquement : on la démarre quand on en a besoin.
 
 Installation des paquets R (une seule fois) :
 
@@ -239,9 +246,11 @@ L'application n'a pas d'authentification : l'arrêter avec `statweb_stop` quand 
 - Une série de mesures par colonne ; la première ligne contient les noms de colonnes (elle peut être omise si toutes ses valeurs sont numériques).
 - Séparateurs reconnus : tabulation, point-virgule, virgule, espace. Décimale : point ou virgule.
 - Les cellules vides et les mentions `NA` sont des valeurs manquantes ; des séries de longueurs différentes sont acceptées (colonnes complétées par des valeurs manquantes).
-- Une colonne contenant au moins une valeur non numérique est traitée comme du texte (groupes, évaluations catégorielles) et un avertissement l'indique.
+- Une colonne dont toutes les valeurs sont des dates (JJ/MM/AAAA, AAAA-MM-JJ, avec heure facultative) est de type date ; les jours sont lus avant les mois.
+- Une colonne contenant au moins une valeur non numérique, qui n'est pas une date, est traitée comme du texte (groupes, évaluations catégorielles) et un avertissement l'indique.
 - Pour un test apparié, les paires incomplètes sont écartées ensemble.
-- Pour un Kappa avec référence : une ligne par échantillon, une colonne de référence (reconnue automatiquement si son nom évoque une référence ou une norme) et une colonne par évaluateur ou par essai. Les évaluateurs entre eux permettent de juger la répétabilité quand chaque essai est une colonne.
+- Cartes de contrôle : une ligne par sous-groupe (une colonne par valeur, cellules vides admises) ou une ligne par mesure avec une colonne qui désigne le sous-groupe. R&R croisée : une ligne par mesure, avec une colonne pour la pièce, une pour l'opérateur et une pour la mesure ; chaque opérateur mesure chaque pièce le même nombre de fois (au moins 2). Khi² : deux colonnes de catégories (une ligne par individu), ou un tableau d'effectifs (une ligne par ligne du tableau, une colonne par modalité, éventuellement une colonne de libellés).
+- Pour un Kappa avec référence : soit une ligne par échantillon, une colonne de référence (reconnue automatiquement si son nom évoque une référence ou une norme) et une colonne par évaluateur ou par essai ; soit une ligne par évaluation (format long : colonnes réponse, évaluateur, échantillon, essai facultatif et référence, reconnues à leur nom). Les évaluateurs entre eux permettent de juger la répétabilité quand chaque essai est une colonne.
 
 ## Précautions statistiques importantes
 
@@ -251,7 +260,12 @@ L'application n'a pas d'authentification : l'arrêter avec `statweb_stop` quand 
 - Les PPM reposent sur une loi normale ajustée aux données : ils sont indicatifs et peuvent être trompeurs si le procédé n'est pas stable ou les données non normales.
 - Le Kappa est non pondéré ; pour des catégories ordonnées, un Kappa pondéré peut être préférable. Sa valeur dépend de la prévalence des catégories.
 - Les comparaisons de Tukey ne sont fournies que lorsque l'ANOVA globale est significative.
+- Le test F est très sensible à la non-normalité : se référer au test de Levene dans ce cas.
+- Le khi² suppose des effectifs théoriques suffisants (au moins 5 dans plus de 80 % des cases, aucun inférieur à 1) ; sinon regrouper des modalités ou utiliser le test exact de Fisher.
+- Les limites d'une carte de contrôle sont calculées sur l'ensemble des données saisies : un procédé instable les élargit. On recommande au moins 20 à 25 sous-groupes.
+- R&R : on recommande au moins 10 pièces représentatives de l'étendue du procédé, 3 opérateurs et 2 à 3 répétitions ; moins de 10 % de variation d'étude est acceptable, de 10 à 30 % acceptable sous conditions, plus de 30 % inacceptable, avec au moins 5 catégories distinctes.
 
 ## Limites de cette version
 
-Pas de gestion de comptes, pas de cartes de contrôle, pas de tests non paramétriques, pas d'étude R&R complète, ANOVA à un seul facteur. Les projets (`.statproj`), la génération de données et le rapport PDF sont propres à l'application de bureau : le bot Telegram ne conserve rien sur disque et l'interface Shiny a sa propre base SQLite.
+Pas de gestion de comptes, pas de cartes de contrôle aux attributs (p, np, c, u) ni de cartes à phases, pas de R&R emboîtée ni de R&R par la méthode des moyennes et étendues, pas de R&R sur plan déséquilibré, ANOVA à un seul facteur. 
+Les projets (`.statproj`), la génération de données et le rapport PDF sont propres à l'application de bureau ; l'interface Shiny a sa propre base SQLite et ne produit pas de rapport PDF. Le bot Telegram ne propose pas encore le test F, le khi², les cartes de contrôle ni le R&R, et ne conserve rien sur disque.
