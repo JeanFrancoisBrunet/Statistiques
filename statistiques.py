@@ -85,6 +85,81 @@ def _convertir(texte, dec):
 RE_DATE_ISO = re.compile(r"^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T]+(\d{1,2}):(\d{2})(?::(\d{2}))?(?:[.,]\d+)?)?$")
 RE_DATE_JMA = re.compile(r"^(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{2}|\d{4})(?:[ T]+(\d{1,2})[:h](\d{2})(?::(\d{2}))?)?$")
 RE_DATE_STOCKEE = re.compile(r"^\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2}(?::\d{2})?)?$")
+# Lois de génération : (libellé, code R, [(clé, libellé du paramètre, valeur proposée)], description)
+LOIS_GENERATION = [
+    ("Normale (Gauss)", "normale", [("moyenne", "Moyenne", "0"), ("ecart_type", "Écart-type", "1")],
+     "Distribution la plus importante en statistique : décrit des phénomènes naturels dont les valeurs se concentrent autour d'une moyenne, avec une symétrie parfaite."),
+    ("Uniforme", "uniforme", [("min", "Minimum", "0"), ("max", "Maximum", "1")],
+     "Toutes les valeurs comprises entre deux bornes sont équiprobables."),
+    ("Poisson", "poisson", [("lambda", "Moyenne λ", "3")],
+     "Nombre d'événements qui se produisent dans un intervalle de temps ou d'espace donné, quand ils arrivent de manière aléatoire et indépendante."),
+    ("Student (t)", "student", [("df", "Degrés de liberté", "10")],
+     "Distribution d'une moyenne d'échantillon quand l'écart-type est estimé à partir de données limitées."),
+    ("Fisher-Snedecor (F)", "fisher", [("df1", "ddl du numérateur", "5"), ("df2", "ddl du dénominateur", "10")],
+     "Rapport de deux variances estimées à partir d'échantillons."),
+    ("Khi²", "khi2", [("df", "Degrés de liberté", "4")],
+     "Somme des carrés de variables normales centrées réduites indépendantes."),
+    ("Binomiale", "binomiale", [("essais", "Nombre d'essais", "10"), ("p", "Probabilité de succès", "0,5")],
+     "Nombre de succès obtenus lors d'un nombre fixe d'expériences indépendantes."),
+    ("Géométrique", "geometrique", [("p", "Probabilité de succès", "0,2")],
+     "Nombre d'essais nécessaires pour obtenir le premier succès dans une série d'expériences indépendantes (au moins 1)."),
+    ("Hypergéométrique", "hypergeometrique", [("N", "Taille de la population", "50"), ("K", "Succès dans la population", "20"), ("m", "Taille du tirage", "10")],
+     "Nombre de succès obtenus lors d'un tirage sans remise dans une population finie."),
+    ("Exponentielle", "exponentielle", [("moyenne", "Moyenne (1 / taux)", "1")],
+     "Temps d'attente avant qu'un événement ne se produise dans un processus continu."),
+    ("Gamma", "gamma", [("forme", "Forme", "2"), ("echelle", "Échelle", "1")],
+     "Somme de temps d'attente exponentiels ; modélise des durées et des quantités positives asymétriques."),
+    ("Logistique", "logistique", [("position", "Position", "0"), ("echelle", "Échelle", "1")],
+     "Proche de la loi normale, avec des queues plus lourdes."),
+    ("Weibull", "weibull", [("forme", "Forme", "1,5"), ("echelle", "Échelle", "1")],
+     "Durées de vie et de défaillance : la forme règle le taux de panne (décroissant, constant ou croissant)."),
+    ("Log-normale", "lognormale", [("mu", "Moyenne du logarithme", "0"), ("sigma", "Écart-type du logarithme", "1")],
+     "Variable dont le logarithme suit une loi normale : valeurs positives, asymétrie à droite."),
+    ("Bêta", "beta", [("a", "Forme a", "2"), ("b", "Forme b", "5")],
+     "Valeurs comprises entre 0 et 1 (proportions, taux)."),
+]
+DOSSIER_ILLUSTRATIONS = DOSSIER / "illustrations"
+# (clé, titre) : les images d'un thème se nomment <clé>.png, ou <clé>_1.png, <clé>_2.png… (dans le dossier « illustrations »)
+ILLUSTRATIONS = [
+    ("demarche_6sigma", "Démarche 6 Sigma"), 
+    ("dpmo", "Défauts par Million d'Opportunités"), 
+    ("multi_variations", "Variations multiples"), 
+    ("stat_descriptive", "Statistiques Descriptives"),  
+    ("stat_inferentielle", "Statistiques Inférentielles"),
+    ("interpreter_distribution", "Interpréter une distribution"), 
+    ("moyenne_ecart_type", "Moyenne et écart-type"),
+    ("loi_normale", "Loi normale"),
+    ("droite_henry", "Interpréter une droite d'Henry"),
+    ("boite_moustaches", "Boîte à moustaches"),
+    ("pareto", "Pareto"),
+    ("carte_controle", "Cartes de Contrôle"),
+    ("tests_hypotheses", "Tests d'hypothèses"),
+    ("risques_alpha_beta", "Risques α et β"),
+    ("khi2", "Test du khi²"),
+    ("test_z", "Test Z"),
+    ("test_t_1", "Test t à 1 échantillon"),
+    ("test_t_2", "Test t à 2 échantillons"),
+    ("test_t_apparie", "Test t apparié"),
+    ("bartlett", "Test de Bartlett"),
+    ("levene", "Test de Levene"),
+    ("mann_whitney", "Test de Mann-Whitney"),
+    ("kruskal_wallis", "Test de Kruskal-Wallis"),
+]
+# thème proposé par le bouton « Illustration… » de chaque onglet d'analyse
+ILLUSTRATION_ONGLET = {"Descriptif": "moyenne_ecart_type", "Normalité": "droite_henry", "Test t": "test_t_1", "Test Z": "test_z",
+                       "Identification de loi": "interpreter_distribution", "Graphiques": "boite_moustaches",
+                       "ANOVA": "tests_hypotheses", "Test F": "bartlett", "Khi²": "khi2"}
+
+
+def images_illustration(cle):
+    """Fichiers PNG du sujet, triés (<clé>.png, <clé>_1.png, <clé>_2.png…)."""
+    if not DOSSIER_ILLUSTRATIONS.is_dir():
+        return []
+    return sorted((f for f in DOSSIER_ILLUSTRATIONS.iterdir()
+                   if f.suffix.lower() == ".png" and (f.stem.lower() == cle or f.stem.lower().startswith(cle + "_"))),
+                  key=lambda f: f.name.lower())
+
+
 AUCUN_GROUPE = "— aucun —"
 AUCUN_ORDRE = "— ordre de saisie —"
 PERIODES_DATE = {"Jour": "jour", "Mois": "mois", "Année": "annee"}
@@ -825,6 +900,27 @@ class Etude:
             self.donnees = Donnees({}, {}, source="données générées")
         return self.donnees.ajouter_colonne(nom, valeurs)
 
+    def generer_loi(self, loi, parametres, n, decimales=3, graine=None):
+        """Valeurs aléatoires d'une loi quelconque de LOIS_GENERATION (tirées par R) ; retourne la liste des valeurs."""
+        n = _entier_borne(n, "Nombre de valeurs", 1, MAX_GENERE)
+        dec = _entier_borne(decimales, "Nombre de décimales", 0, 10)
+        gr = None
+        if graine is not None and str(graine).strip() != "":
+            try:
+                gr = int(str(graine).strip())
+            except ValueError:
+                raise ErreurStat("La valeur d'initialisation doit être un nombre entier (ou rester vide).")
+        res = executer_r(Donnees({"x": [0.0]}, {"x": "num"}), "generer",
+                         {"loi": loi, "parametres": parametres, "n": n, "decimales": dec, "graine": gr})
+        try:
+            vals = res.brut.get("valeurs")
+            vals = [float(v) for v in vals] if isinstance(vals, list) else ([float(vals)] if vals is not None else [])
+        finally:
+            res.liberer()
+        if len(vals) != n:
+            raise ErreurStat("La génération n'a pas produit le nombre de valeurs attendu.")
+        return vals
+
     def descriptif(self, colonnes=None):
         return self._r("descriptif", {"colonnes": list(colonnes) if colonnes else None})
 
@@ -868,6 +964,12 @@ class Etude:
     def commande(self, nom, params):
         """Commande R quelconque (analyses avancées : test F, khi², cartes de contrôle, R&R)."""
         return self._r(nom, params)
+
+    def commande_libre(self, nom, params):
+        """Commande R qui peut se passer des données chargées (valeurs saisies à la main)."""
+        if self.donnees is not None:
+            return self._r(nom, params)
+        return executer_r(Donnees({"x": [0.0]}, {"x": "num"}), nom, {**params, "echelle": self.echelle, "alpha_test": self.alpha})
 
     def test_f(self, x, y, alternative="two.sided"):
         if not x or not y:
@@ -946,8 +1048,10 @@ Données :
 • Une saisie sans ligne de noms est possible si toutes les valeurs de la première ligne sont numériques.
 • Pour un Kappa avec référence : soit une ligne par échantillon, une colonne de référence (reconnue automatiquement si son nom évoque une référence ou une norme)
   et une colonne par évaluateur ou par essai ; soit une ligne par évaluation (colonnes réponse, évaluateur, échantillon, essai, référence : format long, reconnu à ses noms de colonnes).
-• « Générer des données… » crée une variable aléatoire : loi normale (moyenne et écart-type) ou valeurs uniformes entre deux bornes, avec le nombre de valeurs, le nom de la variable, 
-  le nombre de décimales et, si on le souhaite, une valeur d'initialisation pour retrouver exactement le même tirage. La variable s'ajoute aux données chargées, ou les remplace si on le demande.
+• « Générer des données… » crée une variable aléatoire suivant une loi au choix (normale, uniforme, Poisson, Student, Fisher, khi², binomiale, géométrique, hypergéométrique, exponentielle, gamma, logistique, Weibull, log-normale, bêta), avec les paramètres de la loi,
+  le nombre de valeurs, le nom de la variable, le nombre de décimales et, si on le souhaite, une valeur d'initialisation pour retrouver exactement le même tirage. La variable s'ajoute aux données chargées, ou les remplace si on le demande.
+
+Organisation : les onglets sont regroupés (Description, Tests, Modélisation, Qualité, Graphiques) ; l'onglet Illustrations affiche les images de référence (PNG) du dossier « illustrations », et le bouton « Illustration… » de chaque analyse ouvre le sujet associé.
 
 Dates et groupes :
 • Une colonne dont toutes les valeurs sont des dates (JJ/MM/AAAA, AAAA-MM-JJ, avec ou sans heure hh:mm[:ss] ; les dates d'un fichier xlsx sont reconnues aussi) est de type « date » : elle est affichée « (date) » dans le tableau et traitée comme un repère de temps, non comme un nombre.
@@ -967,6 +1071,13 @@ Analyses :
 • Descriptif : effectif, moyenne, médiane, écart-type, variance, quartiles, extrêmes, Shapiro-Wilk.
 • Normalité : tests de Shapiro-Wilk, Anderson-Darling, Kolmogorov-Smirnov (Lilliefors), Cramér-von Mises, Jarque-Bera et Ryan-Joiner (Minitab) au choix, histogramme et droite de Henry, pour une ou plusieurs séries à la fois (un graphique par série).
 • Test t (Student) : un échantillon, deux échantillons indépendants (Welch par défaut, Student si les variances sont supposées égales) ou appariés.
+• Test Z : un échantillon (moyenne comparée à une valeur de référence) ou deux échantillons (différence des moyennes), avec écart(s)-type(s) connu(s) de la population ; hypothèse alternative bilatérale ou unilatérale.
+• Test de Poisson : un échantillon (taux comparé à un taux de référence) ou deux échantillons (rapport des taux) ; les données sont une colonne de comptages (avec la taille de chaque observation) ou des totaux saisis. Tests exacts de Poisson.
+• Estimation : intervalle de confiance d'une moyenne (loi normale si σ est connu, t de Student sinon) pour un niveau de confiance choisi, bilatéral ou unilatéral ; avec une marge d'erreur souhaitée, la taille d'échantillon nécessaire est calculée. Les données peuvent être une colonne ou un résumé saisi.
+• Identification de loi : ajuste plusieurs lois (normale, log-normale, exponentielle, gamma, Weibull, logistique, valeur extrême) à chaque série, avec le test d'Anderson-Darling (p-value par simulation), le critère AIC, les densités ajustées et les diagrammes de probabilité ; H0 : la série suit la loi testée.
+• Corrélation : coefficients de Pearson, Spearman ou Kendall pour toutes les paires de séries, avec p-value (H0 : pas de corrélation), intervalle de confiance (Pearson) et matrice graphique.
+• Régression : linéaire simple ou multiple, ou polynôme de degré 2 ou 3 pour une variable ; équation, R², analyse de variance, coefficients testés (H0 : coefficient nul), VIF, Durbin-Watson, normalité des résidus, observations inhabituelles, graphiques d'ajustement (bandes de confiance et de prédiction) et de résidus.
+• Série chronologique : tendance linéaire, quadratique, exponentielle ou logistique (courbe en S), avec MAPE, MAD, MSD, test de tendance et prévisions (intervalles de prédiction pour les modèles linéaire, quadratique et exponentiel).
 • Test F : compare les variances de deux séries (avec le test de Levene, plus robuste) et indique s'il faut préférer le test t de Student ou celui de Welch.
 • ANOVA : un facteur, colonnes = groupes ou format long ; taille d'effet η², contrôle des résidus, tests de Levene et de Fligner-Killeen,
   ANOVA de Welch et Kruskal-Wallis en alternative ; comparaisons de Tukey si le test global est significatif (de Welch avec ajustement de Holm si les variances diffèrent).
@@ -982,10 +1093,13 @@ Analyses :
   – référence en format long : une ligne par évaluation (réponse, évaluateur, échantillon, essai éventuel et référence de l'échantillon, comme dans une analyse de concordance Minitab) ; 
     les colonnes sont remises en forme automatiquement, sans modifier les données chargées, et le résultat est le même que dans le mode précédent.
   Interprétation selon l'échelle de Landis et Koch (1977) ; repères AIAG (MSA) pour les systèmes de mesure.
+• Cartes de contrôle aux attributs (Qualité) : carte p (proportion d'unités défectueuses) et carte u (défauts par unité), avec des effectifs d'inspection variables (limites variables) et, au choix, une colonne de phases ou un numéro de point à partir duquel commence la phase « Après » (limites calculées séparément dans chaque phase).
+• Graphiques : histogramme (courbe normale facultative), secteurs, barres, bulles, nuage de points (droite d'ajustement), valeurs individuelles, intervalles, boîtes à moustaches et diagramme de probabilité (normale ou autre loi) ; un graphique par groupe avec « Analyser par groupe ».
 • Cartes de contrôle : X-barre/R, X-barre/S et valeurs individuelles/étendues mobiles (I-MR) ; le choix automatique retient I-MR pour des valeurs seules, X-barre/R de 2 à 7 valeurs
   par sous-groupe et X-barre/S à partir de 8. Données : une ligne par sous-groupe (une colonne par valeur) ou une colonne de mesures et une colonne qui désigne le sous-groupe ;
   des sous-groupes de tailles différentes donnent des limites variables. Limites calculées d'après les données (3 écarts-types), 8 tests de causes spéciales au choix (1 à 4 par défaut),
   écart-type intra-sous-groupe estimé, utilisable dans l'onglet Capabilité.
+  Avant / après : une colonne de phases, ou un numéro de point de rupture, calcule les limites séparément dans chaque phase et les trace en escalier.
 • R&R, conventions de Minitab par défaut (à vérifier dans les résultats, qui les rappellent) :
   – croisée : pièces × opérateurs × répétitions, une ligne par mesure, plan équilibré ; méthode ANOVA, interaction retirée si sa p-value dépasse 0,05 (AIAG : 0,25), composantes de variance,
     % contribution, % variation d'étude (L = 6), % tolérance si la tolérance est donnée, nombre de catégories distinctes ; moins de 10 % acceptable, 10 à 30 % acceptable sous conditions, plus de 30 % inacceptable ;
@@ -1000,8 +1114,7 @@ Projet et rapport (onglet Rapport) :
 • Le rapport décrit les données actuellement chargées ; chaque analyse porte sur les données au moment du calcul.
 
 Précautions :
-• Une p-value ne mesure ni l'importance pratique d'un effet ni la probabilité que l'hypothèse soit vraie.
-• Vérifier l'indépendance des observations, la stabilité du procédé et les unités avant toute décision.
+• Vérifier l'indépendance des observations, la stabilité du procédé (la normalité) et les unités avant toute décision.
 • Les PPM reposent sur une loi normale ajustée : ils sont indicatifs.
 """
 
@@ -1047,9 +1160,10 @@ def echelle_ecran(root):
 class PanneauGraphiques:
     """Affiche des graphiques PNG ajustés à la place disponible ; ◀ ▶ pour passer de l'un à l'autre."""
 
-    def __init__(self, parent, plein_ecran=None, fermer=None):
+    def __init__(self, parent, plein_ecran=None, fermer=None, objet="Graphique"):
         import tkinter as tk
         from tkinter import ttk
+        self.objet = objet
         self.frame = ttk.Frame(parent)
         self.figures = []
         self.i = 0
@@ -1062,7 +1176,7 @@ class PanneauGraphiques:
         self.lbl = ttk.Label(barre, text="", width=16, anchor="center")
         self.lbl.pack(side="left")
         ttk.Button(barre, text="▶", width=3, command=lambda: self.aller(1)).pack(side="left")
-        ttk.Button(barre, text="Enregistrer ce graphique…", command=self.enregistrer).pack(side="left", padx=10)
+        ttk.Button(barre, text=f"Enregistrer {objet.lower()}…", command=self.enregistrer).pack(side="left", padx=10)
         if plein_ecran:
             ttk.Button(barre, text="Plein écran", command=plein_ecran).pack(side="left")
         if fermer:
@@ -1089,7 +1203,7 @@ class PanneauGraphiques:
         if not self.figures:
             self.lbl.configure(text="")
             return
-        self.lbl.configure(text=f"Graphique {self.i + 1} / {len(self.figures)}")
+        self.lbl.configure(text=f"{self.objet} {self.i + 1} / {len(self.figures)}")
         try:
             self.photo = charger_image(self.figures[self.i], max(200, w - 8), max(150, h - 8), agrandir=True)
             self.zone.create_image(w // 2, h // 2, image=self.photo)
@@ -1149,54 +1263,68 @@ class DialogueGeneration:
         self.win.resizable(False, False)
         cadre = ttk.Frame(self.win, padding=12)
         cadre.pack(fill="both", expand=True)
-        self.v_loi = tk.StringVar(value="normale")
+        self.v_loi = tk.StringVar(value=LOIS_GENERATION[0][0])
         self.v_nom = tk.StringVar(value=app.nom_variable_suivant())
         self.v_n = tk.StringVar(value="30")
-        self.v_moy, self.v_sd = tk.StringVar(value="0"), tk.StringVar(value="1")
-        self.v_min, self.v_max = tk.StringVar(value="0"), tk.StringVar(value="1")
         self.v_dec, self.v_graine = tk.StringVar(value="3"), tk.StringVar()
         self.v_rempl = tk.BooleanVar(value=False)
+        self.v_params = [tk.StringVar() for _ in range(3)]
 
         ttk.Label(cadre, text="Nom de la variable").grid(row=0, column=0, sticky="e", padx=4, pady=4)
         ttk.Entry(cadre, textvariable=self.v_nom, width=22).grid(row=0, column=1, columnspan=2, sticky="w", pady=4)
         ttk.Label(cadre, text="Nombre de valeurs").grid(row=1, column=0, sticky="e", padx=4, pady=4)
         ttk.Entry(cadre, textvariable=self.v_n, width=10).grid(row=1, column=1, sticky="w", pady=4)
 
-        ttk.Radiobutton(cadre, text="Loi normale", variable=self.v_loi, value="normale", command=self._etat).grid(row=2, column=0, sticky="w", padx=4, pady=(10, 4))
-        ttk.Label(cadre, text="Moyenne").grid(row=2, column=1, sticky="e", padx=(8, 4), pady=(10, 4))
-        self.e_moy = ttk.Entry(cadre, textvariable=self.v_moy, width=10)
-        self.e_moy.grid(row=2, column=2, sticky="w", pady=(10, 4))
-        ttk.Label(cadre, text="Écart-type").grid(row=2, column=3, sticky="e", padx=(8, 4), pady=(10, 4))
-        self.e_sd = ttk.Entry(cadre, textvariable=self.v_sd, width=10)
-        self.e_sd.grid(row=2, column=4, sticky="w", pady=(10, 4))
+        ttk.Label(cadre, text="Loi").grid(row=2, column=0, sticky="e", padx=4, pady=(10, 4))
+        cb = ttk.Combobox(cadre, textvariable=self.v_loi, state="readonly", width=24, values=[l[0] for l in LOIS_GENERATION])
+        cb.grid(row=2, column=1, columnspan=2, sticky="w", pady=(10, 4))
+        cb.bind("<<ComboboxSelected>>", lambda e: self._etat())
+        self.cadre_params = ttk.Frame(cadre)
+        self.cadre_params.grid(row=3, column=0, columnspan=5, sticky="w", padx=4)
+        self.lbl_params, self.ent_params = [], []
+        for k in range(3):
+            lb = ttk.Label(self.cadre_params, text="")
+            en = ttk.Entry(self.cadre_params, textvariable=self.v_params[k], width=10)
+            lb.grid(row=0, column=2 * k, sticky="e", padx=(12 if k else 0, 4), pady=4)
+            en.grid(row=0, column=2 * k + 1, sticky="w", pady=4)
+            self.lbl_params.append(lb)
+            self.ent_params.append(en)
+        self.lbl_desc = ttk.Label(cadre, text="", wraplength=520, justify="left", foreground="#555555")
+        self.lbl_desc.grid(row=4, column=0, columnspan=5, sticky="w", padx=4, pady=(2, 4))
 
-        ttk.Radiobutton(cadre, text="Valeurs uniformes", variable=self.v_loi, value="uniforme", command=self._etat).grid(row=3, column=0, sticky="w", padx=4, pady=4)
-        ttk.Label(cadre, text="Minimum").grid(row=3, column=1, sticky="e", padx=(8, 4), pady=4)
-        self.e_min = ttk.Entry(cadre, textvariable=self.v_min, width=10)
-        self.e_min.grid(row=3, column=2, sticky="w", pady=4)
-        ttk.Label(cadre, text="Maximum").grid(row=3, column=3, sticky="e", padx=(8, 4), pady=4)
-        self.e_max = ttk.Entry(cadre, textvariable=self.v_max, width=10)
-        self.e_max.grid(row=3, column=4, sticky="w", pady=4)
-
-        ttk.Label(cadre, text="Décimales").grid(row=4, column=0, sticky="e", padx=4, pady=(10, 4))
-        ttk.Entry(cadre, textvariable=self.v_dec, width=6).grid(row=4, column=1, sticky="w", pady=(10, 4))
-        ttk.Label(cadre, text="Valeur d'initialisation (facultatif)").grid(row=4, column=2, columnspan=2, sticky="e", padx=(8, 4), pady=(10, 4))
-        ttk.Entry(cadre, textvariable=self.v_graine, width=10).grid(row=4, column=4, sticky="w", pady=(10, 4))
-        ttk.Label(cadre, text="Une même valeur d'initialisation redonne exactement le même tirage.", foreground="#666666").grid(row=5, column=0, columnspan=5, sticky="w", padx=4)
-        ttk.Checkbutton(cadre, text="Remplacer les données actuelles (sinon la variable est ajoutée)", variable=self.v_rempl).grid(row=6, column=0, columnspan=5, sticky="w", padx=4, pady=(8, 4))
+        ttk.Label(cadre, text="Décimales").grid(row=5, column=0, sticky="e", padx=4, pady=(10, 4))
+        ttk.Entry(cadre, textvariable=self.v_dec, width=6).grid(row=5, column=1, sticky="w", pady=(10, 4))
+        ttk.Label(cadre, text="Valeur d'initialisation (facultatif)").grid(row=5, column=2, columnspan=2, sticky="e", padx=(8, 4), pady=(10, 4))
+        ttk.Entry(cadre, textvariable=self.v_graine, width=10).grid(row=5, column=4, sticky="w", pady=(10, 4))
+        ttk.Label(cadre, text="Une même valeur d'initialisation redonne exactement le même tirage.", foreground="#666666").grid(row=6, column=0, columnspan=5, sticky="w", padx=4)
+        ttk.Checkbutton(cadre, text="Remplacer les données actuelles (sinon la variable est ajoutée)", variable=self.v_rempl).grid(row=7, column=0, columnspan=5, sticky="w", padx=4, pady=(8, 4))
 
         barre = ttk.Frame(cadre)
-        barre.grid(row=7, column=0, columnspan=5, sticky="e", pady=(8, 0))
+        barre.grid(row=8, column=0, columnspan=5, sticky="e", pady=(8, 0))
         ttk.Button(barre, text="Générer", command=self.generer).pack(side="left", padx=4)
         ttk.Button(barre, text="Fermer", command=self.win.destroy).pack(side="left", padx=4)
         self._etat()
         self.win.bind("<Escape>", lambda e: self.win.destroy())
         self.win.bind("<Return>", lambda e: self.generer())
 
+    def _loi(self):
+        return next(l for l in LOIS_GENERATION if l[0] == self.v_loi.get())
+
     def _etat(self):
-        normale = self.v_loi.get() == "normale"
-        for e, actif in ((self.e_moy, normale), (self.e_sd, normale), (self.e_min, not normale), (self.e_max, not normale)):
-            e.configure(state="normal" if actif else "disabled")
+        """Champs de paramètres de la loi choisie (valeurs proposées) et description."""
+        _, _, params, desc = self._loi()
+        for k in range(3):
+            if k < len(params):
+                self.lbl_params[k].configure(text=params[k][1])
+                self.v_params[k].set(params[k][2])
+                self.lbl_params[k].grid()
+                self.ent_params[k].grid()
+            else:
+                self.v_params[k].set("")
+                self.lbl_params[k].grid_remove()
+                self.ent_params[k].grid_remove()
+        self.lbl_desc.configure(text=desc)
+        self.win.update_idletasks()
 
     @staticmethod
     def _nombre(texte, nom):
@@ -1208,12 +1336,19 @@ class DialogueGeneration:
     def generer(self):
         from tkinter import messagebox
         try:
-            if self.v_loi.get() == "normale":
-                valeurs = generer_normale(self.v_n.get(), self._nombre(self.v_moy.get(), "la moyenne"),
-                                          self._nombre(self.v_sd.get(), "l'écart-type"), self.v_dec.get(), self.v_graine.get())
+            _, code, params, _ = self._loi()
+            val = {cle: self._nombre(self.v_params[k].get(), f"« {lib} »") for k, (cle, lib, _) in enumerate(params)}
+            if code == "normale":
+                valeurs = generer_normale(self.v_n.get(), val["moyenne"], val["ecart_type"], self.v_dec.get(), self.v_graine.get())
+            elif code == "uniforme":
+                valeurs = generer_uniforme(self.v_n.get(), val["min"], val["max"], self.v_dec.get(), self.v_graine.get())
             else:
-                valeurs = generer_uniforme(self.v_n.get(), self._nombre(self.v_min.get(), "le minimum"),
-                                           self._nombre(self.v_max.get(), "le maximum"), self.v_dec.get(), self.v_graine.get())
+                self.win.configure(cursor="watch")
+                self.win.update_idletasks()
+                try:
+                    valeurs = self.app.etude.generer_loi(code, val, self.v_n.get(), self.v_dec.get(), self.v_graine.get())
+                finally:
+                    self.win.configure(cursor="")
             nom = self.app.etude.generer(self.v_nom.get(), valeurs, remplacer=self.v_rempl.get())
         except ErreurStat as e:
             messagebox.showerror(TITRE, str(e), parent=self.win)
@@ -1247,6 +1382,8 @@ class ZoneResultat:
         barre.pack(fill="x", pady=(6, 2))
         ttk.Button(barre, text="Enregistrer le résultat…", command=self.enregistrer).pack(side="left")
         ttk.Button(barre, text="Graphiques en plein écran…", command=self.agrandir).pack(side="left", padx=8)
+        if ILLUSTRATION_ONGLET.get(nom):
+            ttk.Button(barre, text="Illustration…", command=lambda: app.ouvrir_illustration(ILLUSTRATION_ONGLET[nom])).pack(side="left")
         self.pan = ttk.PanedWindow(self.frame, orient="horizontal")
         self.pan.pack(fill="both", expand=True)
         gauche = ttk.Frame(self.pan)
@@ -1391,7 +1528,7 @@ def boite_dialogue(parent, titre, message, boutons=("OK",), defaut=0, details=No
     barre.pack(side="bottom", anchor="e", pady=(14, 0))           # d'abord, pour rester visible même si la fenêtre est basse
     boutons_tk = []
     for i, texte in enumerate(boutons):
-        b = ttk.Button(barre, text=texte, command=lambda i=i: fin(i))
+        b = tk.Button(barre, text=texte, command=lambda i=i: fin(i), padx=14, pady=3, default="active" if i == defaut else "normal")   # bouton classique : toujours dessiné
         b.pack(side="left", padx=4)
         boutons_tk.append(b)
     if message:
@@ -1407,8 +1544,15 @@ def boite_dialogue(parent, titre, message, boutons=("OK",), defaut=0, details=No
     win.bind("<Return>", lambda e: fin(defaut))
     win.protocol("WM_DELETE_WINDOW", lambda: fin(len(boutons) - 1))
     _placer_fenetre(win, parent)
-    win.grab_set()
-    boutons_tk[defaut].focus_set()
+    win.update()                                  # dessine tout le contenu avant d'attendre l'utilisateur
+    try:
+        win.grab_set()
+    except Exception:
+        pass
+    try:
+        boutons_tk[defaut].focus_set()
+    except Exception:
+        pass
     parent.wait_window(win)
     return choix["i"]
 
@@ -1526,8 +1670,8 @@ class Application:
             pass
         self.root.after(120, self._surveiller)
 
-    def lancer(self, zone, fonction):
-        if self.etude.donnees is None:
+    def lancer(self, zone, fonction, sans_donnees=False):
+        if self.etude.donnees is None and not sans_donnees:
             zone.afficher_erreur("Aucune donnée chargée : utiliser l'onglet « Données ».")
             return
         if self.occupe:
@@ -1563,6 +1707,8 @@ class Application:
     def _construire(self):
         ttk = self.ttk
         self.zones = []
+        self.carnets = {}
+        self.vars_decl, self.listes_decl, self.champs_decl, self.infos_decl = {}, {}, [], []
         barre = ttk.Frame(self.root)
         barre.pack(fill="x", padx=8, pady=(8, 0))
         ttk.Label(barre, text="Risque α des tests").pack(side="left")
@@ -1586,18 +1732,85 @@ class Application:
         ttk.Label(self.root, textvariable=self.statut_var, anchor="w", relief="sunken", padding=(6, 2)).pack(fill="x", padx=8, pady=6)
         self.nb = nb
         self._onglet_donnees(nb)
-        self._onglet_descriptif(nb)
-        self._onglet_normalite(nb)
-        self._onglet_t(nb)
-        self._onglet_f(nb)
-        self._onglet_anova(nb)
-        self._onglet_khi2(nb)
-        self._onglet_capabilite(nb)
-        self._onglet_cartes(nb)
-        self._onglet_rr(nb)
-        self._onglet_kappa(nb)
+        g = self._groupe(nb, "Description")
+        self._onglet_descriptif(g)
+        self._onglet_normalite(g)
+        self._onglet_identification(g)
+        g = self._groupe(nb, "Tests")
+        self._onglet_t(g)
+        self._onglet_z(g)
+        self._onglet_poisson(g)
+        self._onglet_estimation(g)
+        self._onglet_f(g)
+        self._onglet_anova(g)
+        self._onglet_khi2(g)
+        g = self._groupe(nb, "Modélisation")
+        self._onglet_correlation(g)
+        self._onglet_regression(g)
+        self._onglet_serie(g)
+        g = self._groupe(nb, "Qualité")
+        self._onglet_capabilite(g)
+        self._onglet_cartes(g)
+        self._onglet_cartes_attributs(g)
+        self._onglet_rr(g)
+        self._onglet_kappa(g)
+        self._onglet_graphiques(nb)
+        self._onglet_illustrations(nb)
         self._onglet_rapport(nb)
         self._onglet_aide(nb)
+
+    def _groupe(self, nb, titre):
+        """Onglet de premier niveau contenant lui-même des onglets ; renvoie le carnet intérieur."""
+        ttk = self.ttk
+        f = ttk.Frame(nb)
+        nb.add(f, text=titre)
+        interieur = ttk.Notebook(f)
+        interieur.pack(fill="both", expand=True, padx=4, pady=4)
+        self.carnets[titre] = interieur
+        return interieur
+
+    def _montrer_page(self, page):
+        """Affiche une page (onglet), quel que soit son niveau d'imbrication."""
+        carnet = self.nb
+        chemin = []
+        w = page
+        while w is not None and str(w) != str(self.nb):
+            if w.winfo_class() != "TNotebook":
+                chemin.append(w)
+            w = w.master
+        for w in reversed(chemin):
+            try:
+                carnet.select(w)
+            except Exception:
+                break
+            for sous in self.carnets.values():
+                if str(sous.master) == str(w):
+                    carnet = sous
+                    break
+
+    def _chemin_onglet(self):
+        """Position de l'onglet affiché : [haut] ou [haut, sous-onglet]."""
+        haut = self.nb.index(self.nb.select())
+        chemin = [haut]
+        page = self.nb.nametowidget(self.nb.select())
+        for sous in self.carnets.values():
+            if str(sous.master) == str(page):
+                chemin.append(sous.index(sous.select()))
+        return chemin
+
+    def _aller_chemin(self, chemin):
+        if isinstance(chemin, int) and not isinstance(chemin, bool):
+            chemin = [chemin]
+        if not (isinstance(chemin, list) and chemin and all(isinstance(i, int) and not isinstance(i, bool) for i in chemin)):
+            return
+        onglets = self.nb.tabs()
+        if not 0 <= chemin[0] < len(onglets):
+            return
+        self.nb.select(onglets[chemin[0]])
+        page = self.nb.nametowidget(onglets[chemin[0]])
+        for sous in self.carnets.values():
+            if str(sous.master) == str(page) and len(chemin) > 1 and 0 <= chemin[1] < len(sous.tabs()):
+                sous.select(sous.tabs()[chemin[1]])
 
     def _nouvelle_zone(self, parent, nom):
         z = ZoneResultat(parent, self, nom)
@@ -1915,7 +2128,7 @@ class Application:
         if zone is None:
             return
         zone.afficher(e.res)
-        self.nb.select(zone.frame.master)
+        self._montrer_page(zone.frame.master)
         self.statut(f"Analyse du {e.heure[11:16]} réaffichée dans l'onglet « {e.onglet} » : {e.res.titre}")
 
     def retirer_du_journal(self):
@@ -1990,14 +2203,15 @@ class Application:
                 "fx": self.v_fx, "fy": self.v_fy, "falt": self.v_falt, "xtype": self.v_xtype, "xformat": self.v_xformat,
                 "xa": self.v_xa, "xb": self.v_xb, "xvar": self.v_xvar, "xlab": self.v_xlab, "xloi": self.v_xloi,
                 "xprop": self.v_xprop, "xmu": self.v_xmu, "xsd": self.v_xsd, "xk": self.v_xk,
-                "cordre": self.v_cordre, "ctype": self.v_ctype, "cfmt": self.v_cfmt, "cval": self.v_cval, "cgrp": self.v_cgrp,
+                "cordre": self.v_cordre, "cphase": self.v_cphase, "crupt": self.v_crupt, "ctype": self.v_ctype, "cfmt": self.v_cfmt, "cval": self.v_cval, "cgrp": self.v_cgrp,
                 **{f"ct{i + 1}": v for i, v in enumerate(self.v_ctests)},
                 **{f"nt_{k}": v for k, v in self.v_ntests.items()},
+                **self.vars_decl,
                 "rrmode": self.v_rrmode, "r1col": self.v_r1col, "r1ref": self.v_r1ref, "r1tol": self.v_r1tol, "r1k": self.v_r1k, "r1l": self.v_r1l,
                 "rcp": self.v_rcp, "rco": self.v_rco, "rcm": self.v_rcm, "rctol": self.v_rctol, "rcl": self.v_rcl, "rca": self.v_rca}
 
     def _listes_ui(self):
-        return {"desc": self.lb_desc, "norm": self.lb_norm, "anova": self.lb_anova, "kev": self.lb_kev, "xcols": self.lb_xcols, "ccols": self.lb_ccols}
+        return {"desc": self.lb_desc, "norm": self.lb_norm, "anova": self.lb_anova, "kev": self.lb_kev, "xcols": self.lb_xcols, "ccols": self.lb_ccols, **self.listes_decl}
 
     def _etat_ui(self):
         """Réglages courants des onglets (pour analyse ultérieure)."""
@@ -2006,7 +2220,7 @@ class Application:
         if self.etude.groupe:
             etat["groupe"] = {"colonne": self.etude.groupe["colonne"], "periode": self.v_gper.get(), "valeurs": list(self.groupe_vals)}
         try:
-            etat["onglet"] = self.nb.index(self.nb.select())
+            etat["onglet"] = self._chemin_onglet()
         except Exception:
             pass
         return etat
@@ -2048,9 +2262,7 @@ class Application:
             self.v_gcol.set(g["colonne"])
             self.groupe_vals = [v for v in g.get("valeurs", []) if isinstance(v, str)]
             self._changer_groupe(garder=True)
-        idx, onglets = etat.get("onglet"), self.nb.tabs()
-        if isinstance(idx, int) and not isinstance(idx, bool) and 0 <= idx < len(onglets):
-            self.nb.select(onglets[idx])
+        self._aller_chemin(etat.get("onglet"))
 
     def enregistrer_projet(self):
         from tkinter import filedialog, messagebox
@@ -2278,6 +2490,299 @@ class Application:
         apparie, var_egales = self.v_tapp.get(), self.v_tvar.get()
         self.lancer(self.z_t, lambda: self.etude.test_t(x, y or None, mu, apparie, var_egales, alt))
 
+    # --- Onglets décrits par une liste de champs (construction commune)
+    def _onglet_decl(self, nb, titre, prefixe, champs, commande, libre=None, aide=None, fixes=None):
+        """Onglet formé de champs décrits par des dictionnaires :
+        id, lib, type (col | cols | liste | choix | num | case), cols (num | all | txt), opts [(libellé, code)],
+        defaut, option (champ facultatif), si (fonction des valeurs courantes : le champ n'est montré que si elle renvoie vrai), aide."""
+        tk, ttk = self.tk, self.ttk
+        f = self._onglet(nb, titre)
+        c = ttk.Frame(f)
+        c.pack(fill="x", padx=8, pady=8)
+        ligne = {}
+        vals = {}
+        info = {"champs": champs, "prefixe": prefixe, "ligne": ligne, "vals": vals, "fixes": fixes or {}}
+        self.infos_decl.append(info)
+
+        def codes():
+            out = {}
+            for ch in champs:
+                v = vals.get(ch["id"])
+                if ch["type"] == "choix":
+                    out[ch["id"]] = dict(ch["opts"]).get(v.get(), "") if v is not None else ""
+                elif v is not None:
+                    out[ch["id"]] = v.get()
+            return out
+
+        def maj_visibilite(*_):
+            cv = codes()
+            for ch in champs:
+                if ch.get("si") is None:
+                    continue
+                try:
+                    vis = bool(ch["si"](cv))
+                except Exception:
+                    vis = True
+                for w in ligne.get(ch["id"], []):
+                    (w.grid if vis else w.grid_remove)()
+        info["maj_visibilite"] = maj_visibilite
+        for r, ch in enumerate(champs):
+            cle = f"{prefixe}_{ch['id']}"
+            ws = []
+            lab = ttk.Label(c, text=ch["lib"])
+            lab.grid(row=r, column=0, sticky="ne" if ch["type"] in ("cols", "liste") else "e", padx=4, pady=3)
+            ws.append(lab)
+            if ch["type"] in ("cols", "liste"):
+                cadre, lb = self._liste_multi(c, hauteur=ch.get("hauteur", 5))
+                cadre.grid(row=r, column=1, sticky="w", pady=3)
+                ws.append(cadre)
+                self.listes_decl[cle] = lb
+                if ch["type"] == "liste":
+                    for lib, _ in ch["opts"]:
+                        lb.insert("end", lib)
+                    lb.select_set(0, "end")
+                ch["_lb"] = lb
+            else:
+                if ch["type"] == "case":
+                    v = tk.BooleanVar(value=bool(ch.get("defaut", False)))
+                    w = ttk.Checkbutton(c, variable=v)
+                elif ch["type"] == "choix":
+                    v = tk.StringVar(value=ch["opts"][0][0])
+                    if ch.get("defaut"):
+                        v.set(ch["defaut"])
+                    w = ttk.Combobox(c, textvariable=v, state="readonly", width=34, values=[o[0] for o in ch["opts"]])
+                    w.bind("<<ComboboxSelected>>", maj_visibilite)
+                elif ch["type"] == "num":
+                    v = tk.StringVar(value=str(ch.get("defaut", "")))
+                    w = ttk.Entry(c, textvariable=v, width=14)
+                else:                                                   # col
+                    v = tk.StringVar()
+                    w = ttk.Combobox(c, textvariable=v, state="readonly", width=26, values=[])
+                    self.champs_decl.append((w, v, ch))
+                w.grid(row=r, column=1, sticky="w", pady=3)
+                ws.append(w)
+                vals[ch["id"]] = v
+                self.vars_decl[cle] = v
+                v.trace_add("write", maj_visibilite)
+            if ch.get("aide"):
+                h = ttk.Label(c, text=ch["aide"], foreground="#666666")
+                h.grid(row=r, column=2, sticky="w", padx=8)
+                ws.append(h)
+            ligne[ch["id"]] = ws
+        r = len(champs)
+        b = ttk.Frame(c)
+        b.grid(row=r, column=1, sticky="w", pady=8)
+        ttk.Button(b, text="Lancer", command=lambda: self._lancer_decl(zone, info, commande, libre)).pack(side="left")
+        if aide:
+            ttk.Label(c, text=aide, foreground="#555555", wraplength=760, justify="left").grid(row=r + 1, column=0, columnspan=3, sticky="w", padx=4)
+        zone = self._nouvelle_zone(f, titre)
+        maj_visibilite()
+        return zone, info
+
+    def _params_decl(self, info):
+        """Paramètres de la commande R à partir des champs visibles ; ErreurStat si un champ obligatoire manque."""
+        champs, vals = info["champs"], info["vals"]
+        cv = {}
+        for ch in champs:
+            v = vals.get(ch["id"])
+            if ch["type"] == "choix":
+                cv[ch["id"]] = dict(ch["opts"]).get(v.get(), "")
+            elif v is not None:
+                cv[ch["id"]] = v.get()
+        params = {}
+        for ch in champs:
+            if ch.get("si") is not None and not ch["si"](cv):
+                continue
+            i, t = ch["id"], ch["type"]
+            if t == "choix":
+                params[i] = cv[i]
+            elif t == "case":
+                params[i] = bool(cv[i])
+            elif t == "col":
+                val = cv[i]
+                if not val or val.startswith("—"):
+                    if not ch.get("option"):
+                        raise ErreurStat(f"Choisir {ch['lib'].lower()}.")
+                    val = None
+                params[i] = val
+            elif t == "num":
+                n = lire_nombre(cv[i], f"« {ch['lib']} »")
+                if n is None and not ch.get("option") and ch.get("defaut", "") == "":
+                    raise ErreurStat(f"Saisir « {ch['lib']} ».")
+                params[i] = n
+            else:
+                lb = ch["_lb"]
+                sel = [lb.get(k) for k in lb.curselection()]
+                if t == "liste":
+                    sel = [dict(ch["opts"])[x] for x in sel]
+                if ch.get("exclure"):
+                    sel = [x for x in sel if x != cv.get(ch["exclure"])]
+                if not sel:
+                    raise ErreurStat(f"Sélectionner au moins un élément dans « {ch['lib']} ».")
+                params[i] = sel
+        params.update(info.get("fixes", {}))
+        return params
+
+    def _lancer_decl(self, zone, info, commande, libre):
+        try:
+            params = self._params_decl(info)
+        except ErreurStat as e:
+            zone.afficher_erreur(str(e))
+            return
+        sans = bool(libre and libre(params))
+        self.lancer(zone, lambda: (self.etude.commande_libre if sans else self.etude.commande)(commande, params), sans_donnees=sans)
+
+    def _maj_champs_decl(self):
+        d = self.etude.donnees
+        noms = {"num": d.noms_num if d else [], "all": d.noms if d else [], "txt": d.noms_txt if d else [],
+                "ordre": (d.noms_date + d.noms_num) if d else []}
+        for w, v, ch in self.champs_decl:
+            vals = list(noms.get(ch.get("cols", "num"), []))
+            if ch.get("option"):
+                vals = [AUCUN_GROUPE] + vals
+            w["values"] = vals
+            nouveau = ch.get("_vals") != vals
+            ch["_vals"] = vals
+            if v.get() not in vals:
+                k = ch.get("rang", 0)
+                v.set(vals[min(k, len(vals) - 1)] if vals else "")
+            if ch.get("cols") == "ordre" and nouveau:
+                v.set(d.noms_date[0] if d and d.noms_date else AUCUN_GROUPE)
+        for info_ch in self._champs_listes_cols():
+            lb = info_ch["_lb"]
+            lb.delete(0, "end")
+            for n in noms.get(info_ch.get("cols", "num"), []):
+                lb.insert("end", n)
+            if info_ch.get("defaut_sel", True):
+                lb.select_set(0, "end")
+
+    def _champs_listes_cols(self):
+        return [ch for infos in self.infos_decl for ch in infos["champs"] if ch["type"] == "cols"]
+
+    def _onglet_correlation(self, nb):
+        champs = [
+            {"id": "colonnes", "lib": "Séries à corréler", "type": "cols", "aide": "au moins deux séries ; toutes les paires sont calculées"},
+            {"id": "methode", "lib": "Coefficient", "type": "choix", "opts": [("Pearson (relation linéaire)", "pearson"), ("Spearman (rangs)", "spearman"), ("Kendall (rangs)", "kendall")]}]
+        self.z_corr, _ = self._onglet_decl(nb, "Corrélation", "cor", champs, "correlation")
+
+    def _onglet_regression(self, nb):
+        champs = [
+            {"id": "y", "lib": "Réponse (Y)", "type": "col"},
+            {"id": "x", "lib": "Variables explicatives (X)", "type": "cols", "defaut_sel": False, "exclure": "y", "aide": "une ou plusieurs séries (régression multiple)"},
+            {"id": "degre", "lib": "Modèle", "type": "choix", "opts": [("Linéaire (degré 1)", "1"), ("Polynôme de degré 2", "2"), ("Polynôme de degré 3", "3")],
+             "aide": "degré 2 ou 3 : une seule variable X"}]
+        self.z_reg, _ = self._onglet_decl(nb, "Régression", "reg", champs, "regression")
+
+    def _onglet_serie(self, nb):
+        champs = [
+            {"id": "y", "lib": "Série", "type": "col"},
+            {"id": "ordre", "lib": "Ordre des données", "type": "col", "cols": "ordre", "option": True, "aide": "colonne de dates ou de numéros d'ordre (sinon : ordre du tableau)"},
+            {"id": "modeles", "lib": "Modèles de tendance", "type": "liste", "hauteur": 4, "opts": [("Linéaire", "lineaire"), ("Quadratique", "quadratique"), ("Exponentielle", "exponentielle"), ("Logistique (courbe en S)", "logistique")]},
+            {"id": "horizon", "lib": "Périodes à prévoir", "type": "num", "defaut": "0"}]
+        self.z_serie, _ = self._onglet_decl(nb, "Série chronologique", "ser", champs, "serie",
+                                            aide="Avec « Analyser par groupe », la tendance est ajustée groupe par groupe (un graphique par groupe).")
+
+    def _onglet_cartes_attributs(self, nb):
+        champs = [
+            {"id": "type", "lib": "Type de carte", "type": "choix", "opts": [("Carte p — proportion d'unités défectueuses", "p"), ("Carte u — défauts par unité", "u")]},
+            {"id": "defauts", "lib": "Colonne des comptages", "type": "col", "aide": "unités défectueuses (carte p) ou nombre de défauts (carte u) de chaque échantillon"},
+            {"id": "effectif", "lib": "Colonne des effectifs", "type": "col", "option": True, "aide": "taille de chaque échantillon (ou nombre d'unités contrôlées) ; sinon, effectif constant ci-dessous"},
+            {"id": "n", "lib": "Effectif constant", "type": "num", "option": True, "aide": "utilisé si aucune colonne d'effectifs n'est choisie"},
+            {"id": "ordre", "lib": "Ordre des données", "type": "col", "cols": "ordre", "option": True, "aide": "colonne de dates ou de numéros d'ordre (sinon : ordre du tableau)"},
+            {"id": "phase", "lib": "Phases (avant / après)", "type": "col", "cols": "all", "option": True, "aide": "colonne qui désigne la phase de chaque ligne : limites calculées séparément"},
+            {"id": "rupture", "lib": "ou « Après » à partir du point n°", "type": "num", "option": True, "aide": "sans colonne de phases"}]
+        self.z_attr, _ = self._onglet_decl(nb, "Cartes p et u", "att", champs, "carte_attributs", fixes={"tests": [1, 2, 3, 4]})
+
+    TYPES_GRAPH = [("Histogramme", "histogramme"), ("Secteurs (camembert)", "secteurs"), ("Barres", "barres"), ("Bulles", "bulles"),
+                   ("Nuage de points", "nuage"), ("Valeurs individuelles", "individuelles"), ("Intervalles", "intervalles"),
+                   ("Boîte à moustaches", "boite"), ("Diagramme de probabilité", "probabilite")]
+
+    def _onglet_graphiques(self, nb):
+        T = lambda *ts: (lambda v: v["type_graphique"] in ts)
+        series = ("histogramme", "individuelles", "intervalles", "boite", "probabilite")
+        champs = [
+            {"id": "type_graphique", "lib": "Graphique", "type": "choix", "opts": self.TYPES_GRAPH},
+            {"id": "colonnes", "lib": "Séries", "type": "cols", "si": T(*series), "aide": "une série par colonne (un graphique ou une boîte par série)"},
+            {"id": "valeur", "lib": "Valeurs (colonne)", "type": "col", "option": True, "si": T(*series, "secteurs", "barres"),
+             "aide": "séries : avec une colonne de groupes, remplace les séries ; secteurs et barres : valeurs à totaliser"},
+            {"id": "groupe", "lib": "Groupes (colonne)", "type": "col", "cols": "all", "option": True, "si": T(*series, "barres"), "aide": "séries : une boîte ou un intervalle par groupe ; barres : barres côte à côte"},
+            {"id": "categorie", "lib": "Catégories (colonne)", "type": "col", "cols": "all", "si": T("secteurs", "barres")},
+            {"id": "fonction", "lib": "Mesure par catégorie", "type": "choix", "opts": [("Effectif (nombre de lignes)", "effectif"), ("Somme des valeurs", "somme"), ("Moyenne des valeurs", "moyenne")], "si": T("secteurs", "barres")},
+            {"id": "x", "lib": "Axe X", "type": "col", "si": T("bulles", "nuage")},
+            {"id": "y", "lib": "Axe Y", "type": "col", "rang": 1, "si": T("bulles", "nuage")},
+            {"id": "taille", "lib": "Taille des bulles", "type": "col", "rang": 2, "si": T("bulles")},
+            {"id": "couleur", "lib": "Couleur selon", "type": "col", "cols": "all", "option": True, "si": T("bulles", "nuage")},
+            {"id": "ajust", "lib": "Droite d'ajustement", "type": "case", "defaut": True, "si": T("nuage")},
+            {"id": "classes", "lib": "Nombre de classes", "type": "num", "option": True, "si": T("histogramme"), "aide": "facultatif (automatique par défaut)"},
+            {"id": "normale", "lib": "Courbe normale", "type": "case", "defaut": False, "si": T("histogramme")},
+            {"id": "loi", "lib": "Loi de référence", "type": "choix", "opts": self.LOIS_ID, "si": T("probabilite")}]
+        self.z_graph, _ = self._onglet_decl(nb, "Graphiques", "gr", champs, "graphique",
+                                            aide="Avec « Analyser par groupe » en haut de la fenêtre, un graphique est produit pour chaque groupe.")
+
+    ALT3 = [("Différent de", "two.sided"), ("Supérieur à", "greater"), ("Inférieur à", "less")]
+
+    def _onglet_z(self, nb):
+        champs = [
+            {"id": "mode", "lib": "Test", "type": "choix", "opts": [("1 échantillon", "1"), ("2 échantillons", "2")]},
+            {"id": "x", "lib": "Série X", "type": "col"},
+            {"id": "sigma", "lib": "Écart-type connu de X (σ)", "type": "num", "aide": "σ de la population, connu par ailleurs (pas celui de l'échantillon)"},
+            {"id": "y", "lib": "Série Y", "type": "col", "rang": 1, "si": lambda v: v["mode"] == "2"},
+            {"id": "sigma2", "lib": "Écart-type connu de Y (σ₂)", "type": "num", "si": lambda v: v["mode"] == "2"},
+            {"id": "mu", "lib": "Valeur de référence", "type": "num", "defaut": "0",
+             "aide": "moyenne de référence (1 échantillon) ou différence supposée des moyennes (2 échantillons)"},
+            {"id": "alternative", "lib": "Hypothèse alternative", "type": "choix", "opts": self.ALT3}]
+        self.z_z, _ = self._onglet_decl(nb, "Test Z", "z", champs, "z")
+
+    def _onglet_poisson(self, nb):
+        SRC = [("Colonne de comptages", "col"), ("Totaux saisis", "resume")]
+        m2 = lambda v: v["mode"] == "2"
+        champs = [
+            {"id": "mode", "lib": "Test", "type": "choix", "opts": [("1 échantillon", "1"), ("2 échantillons", "2")]},
+            {"id": "source", "lib": "Données (échantillon 1)", "type": "choix", "opts": SRC},
+            {"id": "x", "lib": "Colonne de comptages", "type": "col", "si": lambda v: v["source"] == "col",
+             "aide": "nombre d'événements par observation (entiers ≥ 0)"},
+            {"id": "duree", "lib": "Taille de chaque observation", "type": "num", "defaut": "1", "si": lambda v: v["source"] == "col",
+             "aide": "durée, surface, lot… identique pour chaque observation"},
+            {"id": "total", "lib": "Nombre total d'événements", "type": "num", "si": lambda v: v["source"] == "resume"},
+            {"id": "duree_tot", "lib": "Taille totale observée", "type": "num", "si": lambda v: v["source"] == "resume"},
+            {"id": "source2", "lib": "Données (échantillon 2)", "type": "choix", "opts": SRC, "si": m2},
+            {"id": "x2", "lib": "Colonne de comptages 2", "type": "col", "rang": 1, "si": lambda v: m2(v) and v["source2"] == "col"},
+            {"id": "duree2", "lib": "Taille de chaque observation 2", "type": "num", "defaut": "1", "si": lambda v: m2(v) and v["source2"] == "col"},
+            {"id": "total2", "lib": "Nombre total d'événements 2", "type": "num", "si": lambda v: m2(v) and v["source2"] == "resume"},
+            {"id": "duree_tot2", "lib": "Taille totale observée 2", "type": "num", "si": lambda v: m2(v) and v["source2"] == "resume"},
+            {"id": "lambda0", "lib": "Taux de référence (λ₀)", "type": "num", "si": lambda v: v["mode"] == "1", "aide": "nombre moyen d'événements par unité de taille"},
+            {"id": "ratio0", "lib": "Rapport de référence λ₁ / λ₂", "type": "num", "defaut": "1", "si": m2, "aide": "1 = taux égaux"},
+            {"id": "alternative", "lib": "Hypothèse alternative", "type": "choix", "opts": self.ALT3}]
+        def libre(p):
+            return p.get("source") == "resume" and (p.get("mode") != "2" or p.get("source2") == "resume")
+        self.z_poisson, _ = self._onglet_decl(nb, "Test de Poisson", "poi", champs, "poisson", libre=libre)
+
+    def _onglet_estimation(self, nb):
+        champs = [
+            {"id": "source", "lib": "Données", "type": "choix", "opts": [("Colonne de données", "col"), ("Résumé saisi (n, moyenne, écart-type)", "resume")]},
+            {"id": "x", "lib": "Série", "type": "col", "si": lambda v: v["source"] == "col"},
+            {"id": "n", "lib": "Taille de l'échantillon (n)", "type": "num", "si": lambda v: v["source"] == "resume"},
+            {"id": "moyenne", "lib": "Moyenne de l'échantillon", "type": "num", "si": lambda v: v["source"] == "resume"},
+            {"id": "ecart_type", "lib": "Écart-type de l'échantillon (s)", "type": "num", "option": True, "si": lambda v: v["source"] == "resume"},
+            {"id": "sigma", "lib": "Écart-type connu (σ)", "type": "num", "option": True, "aide": "facultatif : loi normale si connu, loi t de Student sinon"},
+            {"id": "niveau", "lib": "Niveau de confiance (%)", "type": "num", "defaut": "95"},
+            {"id": "cote", "lib": "Intervalle", "type": "choix", "opts": [("Bilatéral", "two.sided"), ("Unilatéral — borne inférieure", "lower"), ("Unilatéral — borne supérieure", "upper")]},
+            {"id": "marge", "lib": "Marge d'erreur souhaitée", "type": "num", "option": True, "aide": "facultatif : donne la taille d'échantillon nécessaire"}]
+        self.z_estim, _ = self._onglet_decl(nb, "Estimation", "est", champs, "estimation", libre=lambda p: p.get("source") == "resume")
+
+    LOIS_ID = [("Normale", "normale"), ("Log-normale", "lognormale"), ("Exponentielle", "exponentielle"), ("Gamma", "gamma"),
+               ("Weibull", "weibull"), ("Logistique", "logistique"), ("Valeur extrême (Gumbel)", "gumbel")]
+
+    def _onglet_identification(self, nb):
+        champs = [
+            {"id": "colonnes", "lib": "Séries à analyser", "type": "cols"},
+            {"id": "lois", "lib": "Lois à comparer", "type": "liste", "opts": self.LOIS_ID, "hauteur": 7},
+            {"id": "simulations", "lib": "Tirages de simulation", "type": "num", "defaut": "200",
+             "aide": "pour la p-value (plus de tirages = plus précis, plus lent)"}]
+        self.z_ident, _ = self._onglet_decl(nb, "Identification de loi", "ident", champs, "identification",
+                                            aide="Chaque loi est ajustée aux données ; H0 : les données suivent cette loi. Elle est conservée si p-value ≥ α. "
+                                                 "Avec « Analyser par groupe », l'identification est faite groupe par groupe.")
+
     def _onglet_anova(self, nb):
         tk, ttk = self.tk, self.ttk
         f = self._onglet(nb, "ANOVA")
@@ -2496,15 +3001,29 @@ class Application:
         self.cb_cordre = ttk.Combobox(c, textvariable=self.v_cordre, state="readonly", width=26, values=[AUCUN_ORDRE])
         self.cb_cordre.grid(row=8, column=1, sticky="w", pady=(10, 3))
         ttk.Label(c, text="Une colonne de dates (ou de numéros d'ordre) trie les points chronologiquement et sert d'étiquette à l'axe.", foreground="#555555").grid(row=8, column=2, sticky="w", padx=12, pady=(10, 3))
-        ttk.Button(c, text="Lancer", command=self.run_carte).grid(row=9, column=1, sticky="w", pady=8)
+        self.v_cphase, self.v_crupt = tk.StringVar(value=AUCUN_GROUPE), tk.StringVar()
+        ttk.Label(c, text="Phases (avant / après)").grid(row=9, column=0, sticky="e", padx=4, pady=3)
+        self.cb_cphase = ttk.Combobox(c, textvariable=self.v_cphase, state="readonly", width=26, values=[AUCUN_GROUPE])
+        self.cb_cphase.grid(row=9, column=1, sticky="w", pady=3)
+        ttk.Label(c, text="Une colonne de phases : limites calculées séparément dans chaque phase (valeurs dans l'ordre d'apparition).", foreground="#555555").grid(row=9, column=2, sticky="w", padx=12)
+        ttk.Label(c, text="ou « Après » à partir du point n°").grid(row=10, column=0, sticky="e", padx=4, pady=3)
+        ttk.Entry(c, textvariable=self.v_crupt, width=8).grid(row=10, column=1, sticky="w", pady=3)
+        ttk.Label(c, text="Sans colonne de phases : les points avant ce numéro forment la phase « Avant », les suivants la phase « Après ».", foreground="#555555").grid(row=10, column=2, sticky="w", padx=12)
+        ttk.Button(c, text="Lancer", command=self.run_carte).grid(row=11, column=1, sticky="w", pady=8)
         self.z_carte = self._nouvelle_zone(f, "Cartes de contrôle")
 
     def run_carte(self):
+        try:
+            rupt = lire_nombre(self.v_crupt.get(), "le numéro de point de la phase « Après »")
+        except ErreurStat as e:
+            self.z_carte.afficher_erreur(str(e))
+            return
         type_ = TYPES_CARTE_R[self.v_ctype.get()]
         tests = [i + 1 for i, v in enumerate(self.v_ctests) if v.get()]
         params = {"type": type_, "format": self.v_cfmt.get(), "colonnes": [self.lb_ccols.get(i) for i in self.lb_ccols.curselection()],
                   "valeur": self.v_cval.get(), "groupe": self.v_cgrp.get(), "tests": tests or [0],
-                  "ordre": "" if self.v_cordre.get() == AUCUN_ORDRE else self.v_cordre.get()}
+                  "ordre": "" if self.v_cordre.get() == AUCUN_ORDRE else self.v_cordre.get(),
+                  "phase": "" if self.v_cphase.get() == AUCUN_GROUPE else self.v_cphase.get(), "rupture": rupt}
         self.lancer(self.z_carte, lambda: self.etude.commande("carte", params))
 
     # --- R&R
@@ -2648,6 +3167,82 @@ class Application:
             a, b = self.v_ka.get(), self.v_kb.get()
             self.lancer(self.z_kappa, lambda: self.etude.kappa(a, b))
 
+    # --- Illustrations
+    def _onglet_illustrations(self, nb):
+        tk, ttk = self.tk, self.ttk
+        f = self._onglet(nb, "Illustrations")
+        ttk.Label(f, foreground="#555555", wraplength=900, justify="left",
+                  text=f"Images de référence (PNG) placées dans le dossier « {DOSSIER_ILLUSTRATIONS.name} » à côté du programme. "
+                       "Plusieurs images pour un même sujet : <sujet>_1.png, <sujet>_2.png… ; « Ajouter une image… » les copie avec le bon nom.").pack(anchor="w", padx=10, pady=(8, 2))
+        corps = ttk.Frame(f)
+        corps.pack(fill="both", expand=True, padx=8, pady=4)
+        gauche = ttk.Frame(corps)
+        gauche.pack(side="left", fill="y", padx=(0, 8))
+        self.lb_illus = tk.Listbox(gauche, exportselection=False, width=38, height=18, activestyle="none")
+        self.lb_illus.pack(side="top", fill="y", expand=True)
+        self.lb_illus.bind("<<ListboxSelect>>", lambda e: self._afficher_illustration())
+        ttk.Button(gauche, text="Ajouter une image…", command=self._ajouter_illustration).pack(fill="x", pady=(6, 0))
+        self.panneau_illus = PanneauGraphiques(corps, objet="Image")
+        self.panneau_illus.frame.pack(side="left", fill="both", expand=True)
+        self._maj_liste_illustrations()
+
+    def _maj_liste_illustrations(self, garder=None):
+        sel = garder if garder is not None else (self.lb_illus.curselection() or (0,))[0]
+        self.lb_illus.delete(0, "end")
+        for cle, titre in ILLUSTRATIONS:
+            n = len(images_illustration(cle))
+            self.lb_illus.insert("end", f"{titre}  ({n} image{'s' if n > 1 else ''})" if n else f"{titre}  (aucune image)")
+        self.lb_illus.selection_set(sel)
+        self._afficher_illustration()
+
+    def _afficher_illustration(self):
+        sel = self.lb_illus.curselection()
+        if not sel:
+            return
+        cle = ILLUSTRATIONS[sel[0]][0]
+        self.panneau_illus.definir(images_illustration(cle))
+        if not self.panneau_illus.figures:
+            self.panneau_illus.zone.delete("all")
+            self.panneau_illus.zone.create_text(14, 14, anchor="nw", justify="left", fill="#666666",
+                                                text=f"Aucune image pour ce sujet.\nPlacer « {cle}.png » (ou {cle}_1.png, {cle}_2.png…) dans le dossier\n« {DOSSIER_ILLUSTRATIONS.name} », ou utiliser « Ajouter une image… ».")
+
+    def _ajouter_illustration(self):
+        from tkinter import filedialog, messagebox
+        sel = self.lb_illus.curselection()
+        if not sel:
+            messagebox.showinfo(TITRE, "Choisir d'abord un sujet dans la liste.")
+            return
+        cle = ILLUSTRATIONS[sel[0]][0]
+        chemins = filedialog.askopenfilenames(parent=self.root, title="Choisir une ou plusieurs images PNG", filetypes=[("Image PNG", "*.png")])
+        if not chemins:
+            return
+        try:
+            DOSSIER_ILLUSTRATIONS.mkdir(exist_ok=True)
+            existantes = images_illustration(cle)
+            if existantes and not messagebox.askyesno(TITRE, f"{len(existantes)} image(s) existe(nt) déjà sur ce thème. Ajouter ?\n(Non = remplacer)", parent=self.root):
+                for e in existantes:
+                    e.unlink()
+                existantes = []
+            k = len(existantes)
+            for ch in chemins:
+                k += 1
+                shutil.copy(ch, DOSSIER_ILLUSTRATIONS / (f"{cle}.png" if k == 1 and len(chemins) == 1 and not existantes else f"{cle}_{k}.png"))
+        except OSError as e:
+            messagebox.showerror(TITRE, f"Copie impossible : {e}", parent=self.root)
+            return
+        self._maj_liste_illustrations(garder=sel[0])
+
+    def ouvrir_illustration(self, cle):
+        """Affiche le sujet donné dans l'onglet Illustrations."""
+        for i, (c, _) in enumerate(ILLUSTRATIONS):
+            if c == cle:
+                self._montrer_page(self.nb.nametowidget(next(t for t in self.nb.tabs() if self.nb.tab(t, "text") == "Illustrations")))
+                self.lb_illus.selection_clear(0, "end")
+                self.lb_illus.selection_set(i)
+                self.lb_illus.see(i)
+                self._maj_liste_illustrations(garder=i)
+                return
+
     def _onglet_aide(self, nb):
         tk = self.tk
         from tkinter import font as tkfont
@@ -2659,6 +3254,7 @@ class Application:
 
     # -- mise à jour des listes de colonnes -----------------------------------------------
     def _maj_choix(self):
+        self._maj_champs_decl()
         d = self.etude.donnees
         num = d.noms_num if d else []
         tout = d.noms if d else []
@@ -2666,6 +3262,9 @@ class Application:
         self.cb_gcol["values"] = [AUCUN_GROUPE] + tout
         self._changer_groupe(garder=True)
         self.cb_cordre["values"] = [AUCUN_ORDRE] + (d.noms_date if d else []) + num
+        self.cb_cphase["values"] = [AUCUN_GROUPE] + tout
+        if self.v_cphase.get() not in self.cb_cphase["values"]:
+            self.v_cphase.set(AUCUN_GROUPE)
         self.v_cordre.set(d.noms_date[0] if d and d.noms_date else AUCUN_ORDRE)
         self.lb_desc.delete(0, "end")
         self.lb_norm.delete(0, "end")

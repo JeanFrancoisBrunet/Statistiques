@@ -389,8 +389,9 @@ tests_causes_speciales <- function(y, cl, sig, tests) {
 }
 
 # Un panneau de carte de contrôle.
-trace_carte <- function(titre, etiq, y, cl, lcl, ucl, sig, signaux, ylab, zones = FALSE, xlab = "Sous-groupe") {
+trace_carte <- function(titre, etiq, y, cl, lcl, ucl, sig, signaux, ylab, zones = FALSE, xlab = "Sous-groupe", ph = NULL) {
   k <- length(y); x <- seq_len(k)
+  segs <- if (is.null(ph)) list(x) else lapply(unique(ph), function(l) which(ph == l))
   hauts <- c(y, ucl, if (all(is.finite(lcl))) lcl)
   yl <- range(hauts[is.finite(hauts)], na.rm = TRUE); marge <- diff(yl) * 0.08; yl <- yl + c(-marge, marge)
   longues0 <- max(nchar(etiq), 0, na.rm = TRUE) > 8
@@ -400,10 +401,18 @@ trace_carte <- function(titre, etiq, y, cl, lcl, ucl, sig, signaux, ylab, zones 
   idx <- if (k <= (if (longues) 20 else 30)) x else unique(round(seq(1, k, length.out = min(k, if (longues) 14 else 15))))
   axis(1, at = idx, labels = etiq[idx], las = if (k > 15 || longues) 2 else 1, cex.axis = 0.8)
   if (longues) mtext(xlab, side = 1, line = par("mar")[1] - 1.3)
-  if (zones) for (m in c(-2, -1, 1, 2)) lines(x, cl + m * sig, type = "s", lty = 3, col = "#aaaaaa")
-  lines(x, ucl, type = "s", col = "#b03030", lwd = 2)
-  lines(x, lcl, type = "s", col = "#b03030", lwd = 2)
-  lines(x, cl, type = "s", col = "#2e8b57", lwd = 2)
+  for (sg in segs) {
+    if (zones) for (m in c(-2, -1, 1, 2)) lines(sg, (cl + m * sig)[sg], type = "s", lty = 3, col = "#aaaaaa")
+    lines(sg, ucl[sg], type = "s", col = "#b03030", lwd = 2)
+    lines(sg, lcl[sg], type = "s", col = "#b03030", lwd = 2)
+    lines(sg, cl[sg], type = "s", col = "#2e8b57", lwd = 2)
+  }
+  if (length(segs) > 1) {
+    for (j in seq_along(segs)) {
+      if (j > 1) abline(v = min(segs[[j]]) - 0.5, lty = 2, col = "#555555")
+      mtext(unique(ph)[j], side = 3, at = mean(range(segs[[j]])), line = -1.1, cex = 0.85, font = 2, col = "#555555")
+    }
+  }
   lines(x, y, col = "#2a5d9f", lwd = 1.2)
   pts <- sort(unique(unlist(signaux)))
   points(x, y, pch = 19, cex = if (k > 60) 0.6 else 0.9, col = "#2a5d9f")
@@ -418,70 +427,9 @@ trace_carte <- function(titre, etiq, y, cl, lcl, ucl, sig, signaux, ylab, zones 
   if (is.finite(lcl[k])) mtext(sprintf("LIC = %s", fmt(lcl[k], 5)), side = 4, at = lcl[k], las = 1, cex = 0.7, line = 0.2, col = "#b03030")
 }
 
-cmd_carte <- function(d, p) {
-  type <- p$type %||% "auto"
-  tests <- suppressWarnings(as.integer(unlist(p$tests))); tests <- tests[!is.na(tests) & tests >= 1 & tests <= 8]
-  if (!length(p$tests)) tests <- 1:4
-  # ---- ordre des données (colonne facultative : date ou numéro d'ordre) : tri, puis étiquettes des points
-  lab_ordre <- NULL; nom_ordre <- NULL
-  if (!is.null(p$ordre) && nzchar(p$ordre)) {
-    nom_ordre <- nom_colonne(d, p$ordre, "Colonne d'ordre")
-    d <- d[order(d[[nom_ordre]], na.last = TRUE), , drop = FALSE]
-    lab_ordre <- etiq_ordre(d[[nom_ordre]])
-  }
-  # ---- constitution des sous-groupes
-  if (identical(p$format, "long")) {
-    vn <- nom_colonne(d, p$valeur, "Colonne des mesures")
-    v <- col_num(d, vn)
-    if (identical(type, "imr")) {
-      ok <- is.finite(v); groupes <- as.list(v[ok])
-      etiq <- if (!is.null(lab_ordre)) lab_ordre[ok] else as.character(seq_along(groupes))
-    } else {
-      gn <- nom_colonne(d, p$groupe, "Colonne des sous-groupes")
-      g <- ch_cat(d[[gn]]); ok <- is.finite(v) & !is.na(g)
-      if (!any(ok)) stop("Aucune mesure exploitable.", call. = FALSE)
-      niv <- unique(g[ok]); groupes <- lapply(niv, function(l) v[ok & g == l]); etiq <- niv
-    }
-  } else {
-    cols <- noms_numeriques(d, unlist(p$colonnes))
-    if (identical(type, "imr") || length(cols) == 1) {
-      if (length(cols) > 1 && identical(type, "imr")) stop("Pour les valeurs individuelles, choisir une seule colonne.", call. = FALSE)
-      ok <- is.finite(d[[cols[1]]]); x <- d[[cols[1]]][ok]; groupes <- as.list(x)
-      etiq <- if (!is.null(lab_ordre)) lab_ordre[ok] else as.character(seq_along(x))
-    } else {
-      M <- as.matrix(d[, cols, drop = FALSE])
-      groupes <- lapply(seq_len(nrow(M)), function(i) M[i, is.finite(M[i, ])])
-      etiq <- if (!is.null(lab_ordre)) lab_ordre else as.character(seq_along(groupes))
-    }
-  }
-  nn <- vapply(groupes, length, integer(1))
-  garde <- nn > 0
-  groupes <- groupes[garde]; etiq <- etiq[garde]; nn <- nn[garde]
-  if (!length(groupes)) stop("Aucune donnée exploitable.", call. = FALSE)
-  avert <- list()
-
-  # ---- type de carte
-  if (identical(type, "auto")) type <- if (all(nn == 1)) "imr" else if (stats::median(nn) >= 8) "xbar_s" else "xbar_r"
-  auto <- identical(p$type %||% "auto", "auto")
-  if (type == "imr" && !all(nn == 1)) {
-    groupes <- as.list(unlist(groupes)); nn <- rep(1L, length(groupes)); etiq <- as.character(seq_along(groupes))
-    avert <- c(avert, list("Valeurs individuelles : toutes les mesures sont prises dans l'ordre des données, une par point."))
-  }
-  if (type != "imr") {
-    petit <- nn < 2
-    if (all(petit)) stop("Les sous-groupes ne contiennent qu'une valeur : utiliser la carte des valeurs individuelles (I-MR).", call. = FALSE)
-    if (any(petit)) {
-      avert <- c(avert, list(sprintf("Sous-groupe(s) d'une seule valeur écarté(s) : %s.", paste(etiq[petit], collapse = ", "))))
-      groupes <- groupes[!petit]; etiq <- etiq[!petit]; nn <- nn[!petit]
-    }
-  }
+# Statistiques et limites de contrôle d'un jeu de sous-groupes (une phase).
+limites_carte <- function(type, groupes, nn) {
   k <- length(groupes)
-  if (k < 2) stop("Il faut au moins 2 sous-groupes (ou 2 mesures) pour construire une carte de contrôle.", call. = FALSE)
-  if (k < 20 && type != "imr") avert <- c(avert, list(sprintf("Seulement %d sous-groupes : on recommande au moins 20 à 25 sous-groupes pour établir des limites de contrôle fiables.", k)))
-  if (k < 20 && type == "imr") avert <- c(avert, list(sprintf("Seulement %d valeurs : on recommande au moins 20 à 25 valeurs pour établir des limites de contrôle fiables.", k)))
-  variable <- length(unique(nn)) > 1
-
-  # ---- statistiques et limites
   if (type == "imr") {
     x <- unlist(groupes)
     mr <- c(NA_real_, abs(diff(x)))
@@ -524,17 +472,122 @@ cmd_carte <- function(d, p) {
     nom1 <- "Moyennes (X-barre)"
     zero_mr <- rep(FALSE, k)
   }
-  if (!is.finite(sig) || sig <= 0) stop("Les mesures sont constantes (dispersion nulle) : impossible de calculer des limites de contrôle.", call. = FALSE)
+  list(sig = sig, meth = meth, titre = titre, nom1 = nom1, nom2 = nom2, y1 = y1, y2 = y2, cl1 = cl1, s1 = s1, ucl1 = ucl1, lcl1 = lcl1,
+       cl2 = cl2, s2 = s2, ucl2 = ucl2, lcl2 = lcl2, zero_mr = zero_mr)
+}
 
-  # ---- tests de causes spéciales
-  tests_var <- intersect(tests, 1:4)
-  s1_sig <- tests_causes_speciales(y1, cl1, s1, tests)
-  ok2 <- !zero_mr
-  s2_sig <- list()
-  if (length(tests_var)) {
-    r2 <- tests_causes_speciales(y2[ok2], cl2[ok2], s2[ok2], tests_var)
-    s2_sig <- lapply(r2, function(ix) which(ok2)[ix])
+cmd_carte <- function(d, p) {
+  type <- p$type %||% "auto"
+  tests <- suppressWarnings(as.integer(unlist(p$tests))); tests <- tests[!is.na(tests) & tests >= 1 & tests <= 8]
+  if (!length(p$tests)) tests <- 1:4
+  # ---- ordre des données (colonne facultative : date ou numéro d'ordre) : tri, puis étiquettes des points
+  lab_ordre <- NULL; nom_ordre <- NULL
+  if (!is.null(p$ordre) && nzchar(p$ordre)) {
+    nom_ordre <- nom_colonne(d, p$ordre, "Colonne d'ordre")
+    d <- d[order(d[[nom_ordre]], na.last = TRUE), , drop = FALSE]
+    lab_ordre <- etiq_ordre(d[[nom_ordre]])
   }
+  # ---- phases : colonne facultative (une valeur par ligne) ou numéro du premier point de la phase « Après »
+  ph_rows <- NULL; ph_pts <- NULL; nom_phase <- NULL
+  if (!is.null(p$phase) && nzchar(p$phase)) { nom_phase <- nom_colonne(d, p$phase, "Colonne de phases"); ph_rows <- as.character(d[[nom_phase]]) }
+  rupt <- num(p$rupture)
+  # ---- constitution des sous-groupes
+  if (identical(p$format, "long")) {
+    vn <- nom_colonne(d, p$valeur, "Colonne des mesures")
+    v <- col_num(d, vn)
+    if (identical(type, "imr")) {
+      ok <- is.finite(v); groupes <- as.list(v[ok])
+      etiq <- if (!is.null(lab_ordre)) lab_ordre[ok] else as.character(seq_along(groupes))
+      if (!is.null(ph_rows)) ph_pts <- ph_rows[ok]
+    } else {
+      gn <- nom_colonne(d, p$groupe, "Colonne des sous-groupes")
+      g <- ch_cat(d[[gn]]); ok <- is.finite(v) & !is.na(g)
+      if (!any(ok)) stop("Aucune mesure exploitable.", call. = FALSE)
+      niv <- unique(g[ok]); groupes <- lapply(niv, function(l) v[ok & g == l]); etiq <- niv
+      if (!is.null(ph_rows)) ph_pts <- vapply(niv, function(l) ph_rows[which(ok & g == l)[1]], "")
+    }
+  } else {
+    cols <- noms_numeriques(d, unlist(p$colonnes))
+    if (identical(type, "imr") || length(cols) == 1) {
+      if (length(cols) > 1 && identical(type, "imr")) stop("Pour les valeurs individuelles, choisir une seule colonne.", call. = FALSE)
+      ok <- is.finite(d[[cols[1]]]); x <- d[[cols[1]]][ok]; groupes <- as.list(x)
+      etiq <- if (!is.null(lab_ordre)) lab_ordre[ok] else as.character(seq_along(x))
+      if (!is.null(ph_rows)) ph_pts <- ph_rows[ok]
+    } else {
+      M <- as.matrix(d[, cols, drop = FALSE])
+      groupes <- lapply(seq_len(nrow(M)), function(i) M[i, is.finite(M[i, ])])
+      etiq <- if (!is.null(lab_ordre)) lab_ordre else as.character(seq_along(groupes))
+      if (!is.null(ph_rows)) ph_pts <- ph_rows
+    }
+  }
+  nn <- vapply(groupes, length, integer(1))
+  garde <- nn > 0
+  groupes <- groupes[garde]; etiq <- etiq[garde]; nn <- nn[garde]
+  if (!is.null(ph_pts)) ph_pts <- ph_pts[garde]
+  if (!length(groupes)) stop("Aucune donnée exploitable.", call. = FALSE)
+  avert <- list()
+
+  # ---- type de carte
+  if (identical(type, "auto")) type <- if (all(nn == 1)) "imr" else if (stats::median(nn) >= 8) "xbar_s" else "xbar_r"
+  auto <- identical(p$type %||% "auto", "auto")
+  if (type == "imr" && !all(nn == 1)) {
+    groupes <- as.list(unlist(groupes)); nn <- rep(1L, length(groupes)); etiq <- as.character(seq_along(groupes)); ph_pts <- NULL
+    avert <- c(avert, list("Valeurs individuelles : toutes les mesures sont prises dans l'ordre des données, une par point."))
+  }
+  if (type != "imr") {
+    petit <- nn < 2
+    if (all(petit)) stop("Les sous-groupes ne contiennent qu'une valeur : utiliser la carte des valeurs individuelles (I-MR).", call. = FALSE)
+    if (any(petit)) {
+      avert <- c(avert, list(sprintf("Sous-groupe(s) d'une seule valeur écarté(s) : %s.", paste(etiq[petit], collapse = ", "))))
+      groupes <- groupes[!petit]; etiq <- etiq[!petit]; nn <- nn[!petit]
+      if (!is.null(ph_pts)) ph_pts <- ph_pts[!petit]
+    }
+  }
+  k <- length(groupes)
+  if (k < 2) stop("Il faut au moins 2 sous-groupes (ou 2 mesures) pour construire une carte de contrôle.", call. = FALSE)
+  if (k < 20 && type != "imr") avert <- c(avert, list(sprintf("Seulement %d sous-groupes : on recommande au moins 20 à 25 sous-groupes pour établir des limites de contrôle fiables.", k)))
+  if (k < 20 && type == "imr") avert <- c(avert, list(sprintf("Seulement %d valeurs : on recommande au moins 20 à 25 valeurs pour établir des limites de contrôle fiables.", k)))
+  variable <- length(unique(nn)) > 1
+
+  # ---- phases (avant / après) : colonne de phases, ou rupture à partir d'un numéro de point
+  ph <- ph_pts
+  if (is.null(ph) && !is.na(rupt)) ph <- ifelse(seq_len(k) < rupt, "Avant", "Après")
+  if (!is.null(ph)) { ph <- as.character(ph); ph[is.na(ph)] <- "(vide)" }
+  niv_ph <- if (is.null(ph)) NULL else unique(ph)
+  idx_ph <- if (is.null(ph)) list(seq_len(k)) else lapply(niv_ph, function(l) which(ph == l))
+  if (!is.null(ph) && length(niv_ph) < 2) { ph <- NULL; niv_ph <- NULL; idx_ph <- list(seq_len(k)) }
+  # ---- statistiques et limites, phase par phase
+  L0 <- NULL; sigs <- numeric(0); mets <- character(0)
+  vec <- function() rep(NA_real_, k)
+  y1 <- y2 <- cl1 <- s1 <- ucl1 <- lcl1 <- cl2 <- s2 <- ucl2 <- lcl2 <- vec(); zero_mr <- rep(FALSE, k)
+  for (j in seq_along(idx_ph)) {
+    ix <- idx_ph[[j]]
+    if (length(ix) < 2) stop(sprintf("La phase « %s » ne contient qu'un point : il en faut au moins 2 par phase.", niv_ph[j]), call. = FALSE)
+    Lj <- limites_carte(type, groupes[ix], nn[ix])
+    if (!is.finite(Lj$sig) || Lj$sig <= 0) stop(sprintf("%s : les mesures sont constantes (dispersion nulle), impossible de calculer des limites de contrôle.", if (is.null(ph)) "Carte" else sprintf("Phase « %s »", niv_ph[j])), call. = FALSE)
+    if (is.null(L0)) L0 <- Lj
+    y1[ix] <- Lj$y1; y2[ix] <- Lj$y2; cl1[ix] <- Lj$cl1; s1[ix] <- Lj$s1; ucl1[ix] <- Lj$ucl1; lcl1[ix] <- Lj$lcl1
+    cl2[ix] <- Lj$cl2; s2[ix] <- Lj$s2; ucl2[ix] <- Lj$ucl2; lcl2[ix] <- Lj$lcl2; zero_mr[ix] <- Lj$zero_mr
+    sigs <- c(sigs, Lj$sig); mets <- c(mets, Lj$meth)
+  }
+  sig <- sigs[1]; meth <- mets[1]; nom1 <- L0$nom1; nom2 <- L0$nom2; titre <- L0$titre
+  if (!is.null(ph) && k < 40 * length(idx_ph)) avert <- c(avert, list("Plusieurs phases : chaque phase a ses propres limites ; une phase courte (moins de 20 points) donne des limites peu fiables."))
+
+  # ---- tests de causes spéciales (appliqués séparément dans chaque phase)
+  tests_var <- intersect(tests, 1:4)
+  fusion <- function(a, b) { for (nm in names(b)) a[[nm]] <- c(a[[nm]], b[[nm]]); a }
+  s1_sig <- list(); s2_sig <- list()
+  for (ix in idx_ph) {
+    r1 <- tests_causes_speciales(y1[ix], cl1[ix], s1[ix], tests)
+    s1_sig <- fusion(s1_sig, lapply(r1, function(v) ix[v]))
+    if (length(tests_var)) {
+      ok2j <- ix[!zero_mr[ix]]
+      r2 <- tests_causes_speciales(y2[ok2j], cl2[ok2j], s2[ok2j], tests_var)
+      s2_sig <- fusion(s2_sig, lapply(r2, function(v) ok2j[v]))
+    }
+  }
+  s1_sig <- s1_sig[order(as.integer(names(s1_sig)))]; s2_sig <- s2_sig[order(as.integer(names(s2_sig)))]
+  ok2 <- !zero_mr
   lis <- function(sg) if (length(sg)) paste0("Test ", names(sg), " : ", vapply(sg, function(v) paste(etiq[v], collapse = ", "), "")) else character(0)
   signaux <- rbind(
     if (length(s1_sig)) data.frame(Carte = nom1, Test = as.integer(names(s1_sig)), Description = DESC_TESTS[as.integer(names(s1_sig))],
@@ -545,6 +598,7 @@ cmd_carte <- function(d, p) {
   marque <- function(sg, kk) { r <- character(kk); for (t in names(sg)) r[sg[[t]]] <- ifelse(nzchar(r[sg[[t]]]), paste0(r[sg[[t]]], ",", t), t); r }
   tab1 <- data.frame(Sous_groupe = etiq, n = nn, Valeur = y1, LIC = lcl1, LC = cl1, LSC = ucl1, Tests = marque(s1_sig, k), stringsAsFactors = FALSE)
   tab2 <- data.frame(Sous_groupe = etiq, n = nn, Valeur = y2, LIC = lcl2, LC = cl2, LSC = ucl2, Tests = marque(s2_sig, k), stringsAsFactors = FALSE)
+  if (!is.null(ph)) { tab1 <- cbind(Phase = ph, tab1); tab2 <- cbind(Phase = ph, tab2) }
   if (type == "imr") tab2 <- tab2[ok2, , drop = FALSE]
   if (type == "imr") tab1$n <- NULL
   if (type == "imr") tab2$n <- NULL
@@ -554,11 +608,11 @@ cmd_carte <- function(d, p) {
   fig <- lire_png("carte_controle.png", largeur = max(900, min(2000, 22 * k + 500)), hauteur = 760 + if (!is.null(lab_ordre) && !identical(p$format, "long")) 200 else 0)
   layout(matrix(1:2, ncol = 1)); par(mar = c(4.5, 4.5, 2.5, 7))
   xl <- if (!is.null(lab_ordre) && !identical(p$format, "long")) nom_ordre else if (type == "imr") "Observation" else "Sous-groupe"
-  trace_carte(nom1, etiq, y1, cl1, lcl1, ucl1, s1, s1_sig, if (type == "imr") "Valeur individuelle" else "Moyenne", zones, xl)
+  trace_carte(nom1, etiq, y1, cl1, lcl1, ucl1, s1, s1_sig, if (type == "imr") "Valeur individuelle" else "Moyenne", zones, xl, ph)
   par(mar = c(4.5, 4.5, 2.5, 7))
   if (type == "imr") {
-    trace_carte(nom2, etiq[ok2], y2[ok2], cl2[ok2], lcl2[ok2], ucl2[ok2], s2[ok2], s2_sig, "Étendue mobile", FALSE, xl)
-  } else trace_carte(nom2, etiq, y2, cl2, lcl2, ucl2, s2, s2_sig, if (type == "xbar_r") "Étendue" else "Écart-type", FALSE, xl)
+    trace_carte(nom2, etiq[ok2], y2[ok2], cl2[ok2], lcl2[ok2], ucl2[ok2], s2[ok2], lapply(s2_sig, function(v) match(v, which(ok2))), "Étendue mobile", FALSE, xl, if (is.null(ph)) NULL else ph[ok2])
+  } else trace_carte(nom2, etiq, y2, cl2, lcl2, ucl2, s2, s2_sig, if (type == "xbar_r") "Étendue" else "Écart-type", FALSE, xl, ph)
   invisible(dev.off())
 
   taille <- if (type == "imr") "valeurs individuelles" else if (variable) sprintf("%d à %d valeurs par sous-groupe (limites variables)", min(nn), max(nn)) else sprintf("sous-groupes de %d valeurs", nn[1])
@@ -567,10 +621,13 @@ cmd_carte <- function(d, p) {
            else sprintf("%d signal(aux) de cause spéciale détecté(s) (tests %s) : le procédé n'est pas stable.", nsig, paste(unique(signaux$Test), collapse = ", "))
   lignes <- c(sprintf("Type de carte : %s%s — %d %s (%s)", titre, if (auto) " (choisi automatiquement)" else "", k, if (type == "imr") "points" else "sous-groupes", taille),
               meth,
-              if (variable) sprintf("Ligne centrale (moyenne) : %s — limites de contrôle variables selon la taille des sous-groupes", fmt(cl1[1], 6)),
-              if (!variable) sprintf("%s : LIC = %s ; LC = %s ; LSC = %s", nom1, fmt(lcl1[1], 6), fmt(cl1[1], 6), fmt(ucl1[1], 6)),
-              if (!variable) sprintf("%s : LIC = %s ; LC = %s ; LSC = %s", nom2, fmt(lcl2[1], 6), fmt(cl2[1], 6), fmt(ucl2[1], 6)),
-              sprintf("%s : σ̂ = %s (à reporter comme « σ intra » dans l'onglet Capabilité pour Cp/Cpk)",
+              if (is.null(ph) && variable) sprintf("Ligne centrale (moyenne) : %s — limites de contrôle variables selon la taille des sous-groupes", fmt(cl1[1], 6)),
+              if (is.null(ph) && !variable) sprintf("%s : LIC = %s ; LC = %s ; LSC = %s", nom1, fmt(lcl1[1], 6), fmt(cl1[1], 6), fmt(ucl1[1], 6)),
+              if (is.null(ph) && !variable) sprintf("%s : LIC = %s ; LC = %s ; LSC = %s", nom2, fmt(lcl2[1], 6), fmt(cl2[1], 6), fmt(ucl2[1], 6)),
+              if (!is.null(ph)) unlist(lapply(seq_along(idx_ph), function(j) { i1 <- idx_ph[[j]][1]
+                c(sprintf("Phase « %s » (%d %s) : %s — LIC = %s ; LC = %s ; LSC = %s %s", niv_ph[j], length(idx_ph[[j]]), if (type == "imr") "points" else "sous-groupes", nom1, fmt(lcl1[i1], 6), fmt(cl1[i1], 6), fmt(ucl1[i1], 6), if (type != "imr" && length(unique(nn[idx_ph[[j]]])) > 1) "(limites variables : valeurs du premier sous-groupe)" else ""),
+                  sprintf("                      %s — LIC = %s ; LC = %s ; LSC = %s ; σ̂ = %s", nom2, fmt(lcl2[i1], 6), fmt(cl2[i1], 6), fmt(ucl2[i1], 6), fmt(sigs[j], 6))) })),
+              if (is.null(ph)) sprintf("%s : σ̂ = %s (à reporter comme « σ intra » dans l'onglet Capabilité pour Cp/Cpk)",
                       if (type == "imr") "Écart-type à court terme estimé" else "Écart-type intra-sous-groupe estimé", fmt(sig, 6)),
               "", concl,
               if (nsig > 0) c("", if (length(s1_sig)) paste0(nom1, " — ", lis(s1_sig)), if (length(s2_sig)) paste0(nom2, " — ", lis(s2_sig))))
@@ -578,6 +635,7 @@ cmd_carte <- function(d, p) {
   tabs <- tabs[!vapply(tabs, is.null, logical(1))]
   names(tabs)[names(tabs) == "Carte_1"] <- paste("Carte :", nom1)
   names(tabs)[names(tabs) == "Carte_2"] <- paste("Carte :", nom2)
+  if (!is.null(ph)) titre <- paste0(titre, sprintf(" — %d phases (%s)", length(idx_ph), paste(niv_ph, collapse = " / ")))
   list(titre = titre, lignes = lignes[!vapply(lignes, is.null, logical(1))], conclusion = concl,
        tables = tabs, figures = c(fig), avertissements = avert)
 }
@@ -787,4 +845,820 @@ cmd_rr_croisee <- function(d, p) {
               "", concl)
   list(titre = "R&R croisée (méthode ANOVA)", lignes = lignes, conclusion = concl,
        tables = tables, figures = c(fig1, fig2), avertissements = avert)
+}
+
+# =============================================================================
+#  Génération de données aléatoires (lois diverses) — valeurs renvoyées dans « valeurs »
+# =============================================================================
+cmd_generer <- function(d, p) {
+  n <- suppressWarnings(as.integer(num(p$n)))
+  if (is.na(n) || n < 1 || n > 100000) stop("Le nombre de valeurs doit être compris entre 1 et 100000.", call. = FALSE)
+  g <- num(p$graine)
+  if (!is.na(g)) set.seed(as.integer(g))
+  q <- p$parametres
+  par <- function(k, nom, minimum = -Inf, strict = FALSE) {
+    v <- num(q[[k]])
+    if (is.na(v)) stop(sprintf("Saisir %s.", nom), call. = FALSE)
+    if (if (strict) v <= minimum else v < minimum) stop(sprintf("%s doit être %s %s.", nom, if (strict) "strictement supérieure à" else "supérieure ou égale à", format(minimum)), call. = FALSE)
+    v
+  }
+  entier <- function(k, nom, minimum) {
+    v <- par(k, nom, minimum)
+    if (v != round(v)) stop(sprintf("%s doit être un nombre entier.", nom), call. = FALSE)
+    as.integer(v)
+  }
+  proba <- function(k, nom) { v <- par(k, nom); if (v <= 0 || v > 1) stop(sprintf("%s doit être comprise entre 0 (exclu) et 1.", nom), call. = FALSE); v }
+  loi <- p$loi
+  discrete <- loi %in% c("poisson", "binomiale", "geometrique", "hypergeometrique")
+  x <- switch(loi,
+    normale = stats::rnorm(n, par("moyenne", "La moyenne"), par("ecart_type", "L'écart-type", 0, TRUE)),
+    uniforme = { a <- par("min", "Le minimum"); b <- par("max", "Le maximum"); if (a >= b) stop("Le minimum doit être inférieur au maximum.", call. = FALSE); stats::runif(n, a, b) },
+    poisson = stats::rpois(n, par("lambda", "La moyenne λ", 0, TRUE)),
+    student = stats::rt(n, par("df", "Le nombre de degrés de liberté", 0, TRUE)),
+    fisher = stats::rf(n, par("df1", "Le ddl du numérateur", 0, TRUE), par("df2", "Le ddl du dénominateur", 0, TRUE)),
+    khi2 = stats::rchisq(n, par("df", "Le nombre de degrés de liberté", 0, TRUE)),
+    binomiale = stats::rbinom(n, entier("essais", "Le nombre d'essais", 1), proba("p", "La probabilité de succès")),
+    geometrique = stats::rgeom(n, proba("p", "La probabilité de succès")) + 1,      # nombre d'essais jusqu'au premier succès (au moins 1)
+    hypergeometrique = {
+      N <- entier("N", "La taille de la population", 1); K <- entier("K", "Le nombre de succès dans la population", 0); m <- entier("m", "La taille du tirage", 1)
+      if (K > N) stop("Le nombre de succès ne peut pas dépasser la taille de la population.", call. = FALSE)
+      if (m > N) stop("Le tirage ne peut pas dépasser la taille de la population.", call. = FALSE)
+      stats::rhyper(n, K, N - K, m)
+    },
+    exponentielle = stats::rexp(n, 1 / par("moyenne", "La moyenne", 0, TRUE)),
+    gamma = stats::rgamma(n, shape = par("forme", "La forme", 0, TRUE), scale = par("echelle", "L'échelle", 0, TRUE)),
+    logistique = stats::rlogis(n, par("position", "La position"), par("echelle", "L'échelle", 0, TRUE)),
+    weibull = stats::rweibull(n, shape = par("forme", "La forme", 0, TRUE), scale = par("echelle", "L'échelle", 0, TRUE)),
+    lognormale = stats::rlnorm(n, par("mu", "La moyenne du logarithme"), par("sigma", "L'écart-type du logarithme", 0, TRUE)),
+    beta = stats::rbeta(n, par("a", "Le paramètre a", 0, TRUE), par("b", "Le paramètre b", 0, TRUE)),
+    stop("Loi inconnue : ", loi, call. = FALSE))
+  dec <- suppressWarnings(as.integer(num(p$decimales))); if (is.na(dec)) dec <- 3L
+  if (!discrete) x <- round(x, max(0L, min(10L, dec)))
+  list(titre = paste("Valeurs aléatoires —", loi), lignes = c(sprintf("%d valeur(s) générée(s) ; moyenne %s, écart-type %s.", n, fmt(mean(x)), fmt(if (n > 1) stats::sd(x) else NA_real_))),
+       valeurs = as.numeric(x), tables = list(), figures = character(0), avertissements = list())
+}
+
+# =============================================================================
+#  Lot 2 — Test Z, tests de Poisson, estimation, identification de loi
+# =============================================================================
+hyp_textes <- function(alt, sujet, ref, f = FALSE) {
+  e <- if (f) "e" else ""
+  switch(alt,
+         greater = list(h0 = sprintf("H0 : %s est inférieur%s ou égal%s à %s.", sujet, e, e, ref), h1 = sprintf("H1 : %s est supérieur%s à %s.", sujet, e, ref)),
+         less = list(h0 = sprintf("H0 : %s est supérieur%s ou égal%s à %s.", sujet, e, e, ref), h1 = sprintf("H1 : %s est inférieur%s à %s.", sujet, e, ref)),
+         list(h0 = sprintf("H0 : %s est égal%s à %s.", sujet, e, ref), h1 = sprintf("H1 : %s diffère de %s.", sujet, ref)))
+}
+val_pos <- function(v, nom, strict = TRUE) {
+  if (is.na(v) || (if (strict) v <= 0 else v < 0)) stop(sprintf("%s doit être %s.", nom, if (strict) "strictement positif" else "positif ou nul"), call. = FALSE)
+  v
+}
+alt_lire <- function(a) if (isTRUE(a %in% c("greater", "less"))) a else "two.sided"
+
+# Courbe de la loi de la statistique sous H0 : zone de rejet, statistique observée.
+dessin_stat <- function(titre, stat, alt, ddl = NA) {
+  est_z <- is.na(ddl)
+  qf <- function(q) if (est_z) stats::qnorm(q) else stats::qt(q, ddl)
+  df <- function(x) if (est_z) stats::dnorm(x) else stats::dt(x, ddl)
+  lim <- max(4, min(abs(stat), 12) * 1.2)
+  x <- seq(-lim, lim, length.out = 500); y <- df(x)
+  par(mar = c(4.5, 4.5, 3, 1))
+  plot(x, y, type = "l", lwd = 2, xlab = "Statistique", ylab = "Densité", main = titre, ylim = c(0, max(y) * 1.15))
+  zone <- function(sel) { if (any(sel)) polygon(c(x[sel][1], x[sel], tail(x[sel], 1)), c(0, y[sel], 0), col = "#e8b4b4", border = NA) }
+  if (alt == "two.sided") { zone(x <= qf(ALPHA / 2)); zone(x >= qf(1 - ALPHA / 2)) }
+  else if (alt == "greater") zone(x >= qf(1 - ALPHA)) else zone(x <= qf(ALPHA))
+  lines(x, y, lwd = 2)
+  abline(v = stat, col = "#b03030", lwd = 2)
+  legend("topright", bty = "n", legend = c(sprintf("zone de rejet (α = %s)", alpha_txt()), sprintf("statistique observée = %s", fmt(stat, 4))),
+         fill = c("#e8b4b4", NA), border = NA, lty = c(NA, 1), col = c(NA, "#b03030"), lwd = c(NA, 2), merge = TRUE, cex = 0.85)
+}
+
+cmd_z <- function(d, p) {
+  alt <- alt_lire(p$alternative)
+  deux <- identical(as.character(p$mode), "2")
+  mu0 <- num(p$mu); if (is.na(mu0)) mu0 <- 0
+  xn <- nom_colonne(d, p$x, "Série X"); x <- sans_na(col_num(d, xn)); n1 <- length(x)
+  s1 <- val_pos(num(p$sigma), "L'écart-type connu (σ)")
+  if (n1 < 1) stop("La série X ne contient aucune valeur.", call. = FALSE)
+  if (!deux) {
+    m <- mean(x); se <- s1 / sqrt(n1); est <- m - mu0
+    sujet <- sprintf("la moyenne de « %s »", xn); ref <- fmt(mu0)
+    tab <- data.frame(Serie = xn, n = n1, Moyenne = m, Sigma_connu = s1, Erreur_standard = se, stringsAsFactors = FALSE)
+    centre <- m
+  } else {
+    yn <- nom_colonne(d, p$y, "Série Y"); y <- sans_na(col_num(d, yn)); n2 <- length(y)
+    s2 <- val_pos(num(p$sigma2), "L'écart-type connu de la série Y (σ₂)")
+    if (n2 < 1) stop("La série Y ne contient aucune valeur.", call. = FALSE)
+    se <- sqrt(s1^2 / n1 + s2^2 / n2); centre <- mean(x) - mean(y); est <- centre - mu0
+    sujet <- sprintf("la différence des moyennes (« %s » − « %s »)", xn, yn); ref <- fmt(mu0)
+    tab <- data.frame(Serie = c(xn, yn), n = c(n1, n2), Moyenne = c(mean(x), mean(y)), Sigma_connu = c(s1, s2),
+                      Erreur_standard = c(s1 / sqrt(n1), s2 / sqrt(n2)), stringsAsFactors = FALSE)
+  }
+  z <- est / se
+  pv <- switch(alt, two.sided = 2 * stats::pnorm(-abs(z)), greater = stats::pnorm(z, lower.tail = FALSE), less = stats::pnorm(z))
+  zc <- if (alt == "two.sided") stats::qnorm(1 - ALPHA / 2) else stats::qnorm(1 - ALPHA)
+  ic <- switch(alt, two.sided = c(centre - zc * se, centre + zc * se), greater = c(centre - zc * se, Inf), less = c(-Inf, centre + zc * se))
+  h <- hyp_textes(alt, sujet, ref, f = TRUE)
+  fig <- lire_png("test_z.png", largeur = 760, hauteur = 520)
+  dessin_stat(if (deux) "Test Z à 2 échantillons — loi N(0 ; 1) sous H0" else "Test Z à 1 échantillon — loi N(0 ; 1) sous H0", z, alt)
+  invisible(dev.off())
+  dec <- decision(pv, "aucune différence n'est mise en évidence.", "la différence est statistiquement significative.")
+  lib_ic <- switch(alt, two.sided = sprintf("Intervalle de confiance à %s", conf_txt()), greater = sprintf("Borne inférieure à %s", conf_txt()), less = sprintf("Borne supérieure à %s", conf_txt()))
+  val_ic <- switch(alt, two.sided = sprintf("[%s ; %s]", fmt(ic[1]), fmt(ic[2])), greater = sprintf("%s", fmt(ic[1])), less = sprintf("%s", fmt(ic[2])))
+  list(titre = if (deux) "Test Z — deux échantillons (σ connus)" else "Test Z — un échantillon (σ connu)",
+       lignes = c(h$h0, h$h1, regle(), sprintf("Écart(s)-type(s) connu(s) (σ) : %s", paste(fmt(if (deux) c(s1, s2) else s1), collapse = " ; ")),
+                  sprintf("%s : %s", if (deux) "Différence estimée" else "Moyenne estimée", fmt(centre)),
+                  sprintf("Statistique Z : %s", fmt(z)), sprintf("p-value : %s", fmt_p(pv)), sprintf("%s : %s", lib_ic, val_ic), dec),
+       conclusion = sub("^Décision : ", "", sub("\\.$", "", dec)),
+       tables = list(Series = tab), figures = c(fig),
+       avertissements = list("Le test Z suppose l'écart-type de la population connu ; à défaut, utiliser le test t. Il suppose aussi des observations indépendantes et une loi normale (ou un grand échantillon)."))
+}
+
+# ---- Poisson ---------------------------------------------------------------
+ic_poisson <- function(k, T, niv) { r <- stats::poisson.test(k, T, conf.level = niv)$conf.int; as.numeric(r) }
+lire_poisson <- function(d, p, suf = "") {
+  src <- p[[paste0("source", suf)]] %||% p$source %||% "col"
+  if (identical(src, "resume")) {
+    k <- num(p[[paste0("total", suf)]]); T <- num(p[[paste0("duree_tot", suf)]])
+    if (is.na(k) || k < 0 || abs(k - round(k)) > 1e-8) stop("Le nombre total d'événements doit être un entier positif ou nul.", call. = FALSE)
+    val_pos(T, "La taille totale de l'échantillon (durée, surface…)")
+    return(list(k = round(k), T = T, nom = if (nzchar(suf)) "échantillon 2" else "échantillon"))
+  }
+  nm <- nom_colonne(d, p[[paste0("x", suf)]], "Colonne de comptages"); v <- sans_na(col_num(d, nm))
+  if (!length(v)) stop(sprintf("La colonne « %s » ne contient aucune valeur.", nm), call. = FALSE)
+  if (any(v < 0) || any(abs(v - round(v)) > 1e-8)) stop(sprintf("La colonne « %s » doit contenir des nombres d'événements entiers, positifs ou nuls.", nm), call. = FALSE)
+  L <- num(p[[paste0("duree", suf)]]); if (is.na(L)) L <- 1
+  val_pos(L, "La taille de chaque observation (durée, surface…)")
+  list(k = sum(v), T = length(v) * L, nom = nm)
+}
+cmd_poisson <- function(d, p) {
+  alt <- alt_lire(p$alternative); deux <- identical(as.character(p$mode), "2")
+  a <- lire_poisson(d, p)
+  la <- a$k / a$T
+  if (!deux) {
+    l0 <- val_pos(num(p$lambda0), "Le taux de référence")
+    r <- stats::poisson.test(a$k, a$T, r = l0, alternative = alt, conf.level = 1 - ALPHA)
+    h <- hyp_textes(alt, sprintf("le taux d'événements de « %s »", a$nom), fmt(l0))
+    ic <- as.numeric(r$conf.int); pv <- r$p.value
+    lib <- sprintf("Intervalle de confiance exact à %s du taux", conf_txt())
+    lignes <- c(h$h0, h$h1, regle(), sprintf("Nombre total d'événements : %s ; taille totale observée : %s", fmt(a$k), fmt(a$T)),
+                sprintf("Taux estimé : %s", fmt(la)), sprintf("%s : [%s ; %s]", lib, fmt(ic[1]), fmt(ic[2])), sprintf("p-value (test exact de Poisson) : %s", fmt_p(pv)))
+    tab <- data.frame(Echantillon = a$nom, Evenements = a$k, Taille = a$T, Taux = la, Borne_inf = ic[1], Borne_sup = ic[2], stringsAsFactors = FALSE)
+    fig <- lire_png("test_poisson.png", largeur = 700, hauteur = 520)
+    par(mar = c(4, 5, 3, 1)); ymax <- max(c(la, l0, ic[is.finite(ic)])) * 1.2
+    b <- barplot(la, ylim = c(0, ymax), col = "#cfe0f5", names.arg = a$nom, ylab = "Taux d'événements", main = "Test de Poisson — 1 échantillon")
+    segments(b, max(ic[1], 0), b, min(ic[2], ymax), lwd = 2); abline(h = l0, lty = 2, col = "#b03030")
+    legend("topright", bty = "n", lty = c(2, 1), lwd = 2, col = c("#b03030", "black"), legend = c(sprintf("taux de référence = %s", fmt(l0)), "intervalle de confiance"), cex = 0.85)
+    invisible(dev.off())
+  } else {
+    b2 <- lire_poisson(d, p, "2"); lb <- b2$k / b2$T
+    if (identical(a$nom, b2$nom)) { a$nom <- paste0(a$nom, " (1)"); b2$nom <- paste0(b2$nom, " (2)") }
+    ratio0 <- num(p$ratio0); if (is.na(ratio0)) ratio0 <- 1; val_pos(ratio0, "Le rapport de référence")
+    r <- stats::poisson.test(c(a$k, b2$k), c(a$T, b2$T), r = ratio0, alternative = alt, conf.level = 1 - ALPHA)
+    h <- hyp_textes(alt, sprintf("le rapport des taux (« %s » / « %s »)", a$nom, b2$nom), fmt(ratio0))
+    ic <- as.numeric(r$conf.int); pv <- r$p.value
+    dif <- la - lb; sed <- sqrt(a$k / a$T^2 + b2$k / b2$T^2); zc <- stats::qnorm(1 - ALPHA / 2)
+    lignes <- c(h$h0, h$h1, regle(),
+                sprintf("%s : %s événement(s) sur une taille de %s → taux %s", a$nom, fmt(a$k), fmt(a$T), fmt(la)),
+                sprintf("%s : %s événement(s) sur une taille de %s → taux %s", b2$nom, fmt(b2$k), fmt(b2$T), fmt(lb)),
+                sprintf("Différence des taux : %s (intervalle approché à %s : [%s ; %s])", fmt(dif), conf_txt(), fmt(dif - zc * sed), fmt(dif + zc * sed)),
+                sprintf("Rapport des taux estimé : %s ; intervalle exact à %s : [%s ; %s]", fmt(unname(r$estimate)), conf_txt(), fmt(ic[1]), fmt(ic[2])),
+                sprintf("p-value (test exact conditionnel de Poisson) : %s", fmt_p(pv)))
+    ci1 <- ic_poisson(a$k, a$T, 1 - ALPHA); ci2 <- ic_poisson(b2$k, b2$T, 1 - ALPHA)
+    tab <- data.frame(Echantillon = c(a$nom, b2$nom), Evenements = c(a$k, b2$k), Taille = c(a$T, b2$T), Taux = c(la, lb),
+                      Borne_inf = c(ci1[1], ci2[1]), Borne_sup = c(ci1[2], ci2[2]), stringsAsFactors = FALSE)
+    fig <- lire_png("test_poisson.png", largeur = 700, hauteur = 520)
+    par(mar = c(4, 5, 3, 1)); ymax <- max(c(la, lb, ci1, ci2)) * 1.15
+    bb <- barplot(c(la, lb), ylim = c(0, ymax), col = c("#cfe0f5", "#f5dcc0"), names.arg = c(a$nom, b2$nom), ylab = "Taux d'événements", main = "Test de Poisson — 2 échantillons")
+    segments(bb, c(ci1[1], ci2[1]), bb, c(ci1[2], ci2[2]), lwd = 2)
+    invisible(dev.off())
+  }
+  dec <- decision(pv, "aucune différence n'est mise en évidence.", "la différence est statistiquement significative.")
+  list(titre = if (deux) "Test de Poisson — deux échantillons" else "Test de Poisson — un échantillon",
+       lignes = c(lignes, dec), conclusion = sub("^Décision : ", "", sub("\\.$", "", dec)), tables = list(Taux = tab), figures = c(fig),
+       avertissements = list("Le taux est le nombre d'événements par unité de taille (durée, surface, lot…) ; les échantillons doivent être exprimés dans la même unité. Hypothèse : événements indépendants et taux constant (loi de Poisson)."))
+}
+
+# ---- Estimation d'une moyenne (loi normale) ------------------------------------
+cmd_estimation <- function(d, p) {
+  niv <- num(p$niveau); if (is.na(niv)) niv <- 100 * (1 - ALPHA)
+  if (niv > 1) niv <- niv / 100
+  if (niv <= 0 || niv >= 1) stop("Le niveau de confiance doit être compris entre 0 et 100 %.", call. = FALSE)
+  cote <- if (isTRUE(p$cote %in% c("lower", "upper"))) p$cote else "two.sided"
+  crit_q <- if (cote == "two.sided") 1 - (1 - niv) / 2 else niv
+  sig <- num(p$sigma); if (!is.na(sig)) val_pos(sig, "L'écart-type connu (σ)")
+  E <- num(p$marge); if (!is.na(E)) val_pos(E, "La marge d'erreur souhaitée")
+  if (identical(p$source, "resume")) {
+    n <- num(p$n); m <- num(p$moyenne); s <- num(p$ecart_type)
+    if (is.na(n) || n < 1 || abs(n - round(n)) > 1e-8) stop("La taille de l'échantillon doit être un entier positif.", call. = FALSE)
+    if (is.na(m)) stop("Saisir la moyenne de l'échantillon.", call. = FALSE)
+    if (is.na(sig)) { val_pos(s, "L'écart-type de l'échantillon") }
+    nom <- "échantillon"
+  } else {
+    nom <- nom_colonne(d, p$x, "Série X"); x <- sans_na(col_num(d, nom))
+    n <- length(x); if (n < 2 && is.na(sig)) stop("Il faut au moins 2 valeurs pour estimer l'écart-type.", call. = FALSE)
+    m <- mean(x); s <- if (n >= 2) stats::sd(x) else NA_real_
+  }
+  sigma_connu <- !is.na(sig)
+  sg <- if (sigma_connu) sig else s
+  se <- sg / sqrt(n)
+  q <- if (sigma_connu) stats::qnorm(crit_q) else stats::qt(crit_q, n - 1)
+  marge <- q * se
+  ic <- switch(cote, two.sided = c(m - marge, m + marge), lower = c(m - marge, Inf), upper = c(-Inf, m + marge))
+  nec <- NA
+  if (!is.na(E)) {
+    nec <- ceiling((stats::qnorm(crit_q) * sg / E)^2)
+    if (!sigma_connu) for (i in 1:100) { nn <- max(2, ceiling((stats::qt(crit_q, max(nec - 1, 1)) * sg / E)^2)); if (nn == nec) break; nec <- nn }
+    nec <- max(2, nec)
+  }
+  lib_c <- switch(cote, two.sided = "bilatéral", lower = "unilatéral (borne inférieure)", upper = "unilatéral (borne supérieure)")
+  lignes <- c(sprintf("Estimation de la moyenne de « %s » — loi normale, intervalle %s", nom, lib_c),
+              sprintf("Niveau de confiance : %s", pct_txt(niv)),
+              sprintf("Taille de l'échantillon : %s ; moyenne : %s ; écart-type %s : %s", fmt(n), fmt(m), if (sigma_connu) "connu (σ)" else "de l'échantillon (s)", fmt(sg)),
+              sprintf("Erreur standard : %s ; loi utilisée : %s", fmt(se), if (sigma_connu) "normale (σ connu)" else sprintf("t de Student à %s ddl (σ inconnu)", fmt(n - 1))),
+              sprintf("Marge d'erreur obtenue : %s", fmt(marge)))
+  lignes <- c(lignes, switch(cote,
+              two.sided = sprintf("Intervalle de confiance à %s : [%s ; %s]", pct_txt(niv), fmt(ic[1]), fmt(ic[2])),
+              lower = sprintf("Borne inférieure de confiance à %s : %s (la moyenne est supérieure à cette valeur)", pct_txt(niv), fmt(ic[1])),
+              upper = sprintf("Borne supérieure de confiance à %s : %s (la moyenne est inférieure à cette valeur)", pct_txt(niv), fmt(ic[2]))))
+  if (!is.na(E)) lignes <- c(lignes, sprintf("Pour une marge d'erreur de %s : taille d'échantillon nécessaire = %s (avec l'écart-type %s = %s)", fmt(E), fmt(nec), if (sigma_connu) "connu" else "de l'échantillon", fmt(sg)))
+  fig <- lire_png("estimation.png", largeur = 760, hauteur = 480)
+  par(mar = c(4.5, 4.5, 3, 1))
+  lim <- if (is.finite(marge)) max(4 * se, 1.6 * marge) else 4 * se
+  xs <- seq(m - lim, m + lim, length.out = 500); ys <- stats::dnorm(xs, m, se)
+  plot(xs, ys, type = "l", lwd = 2, xlab = "Moyenne", ylab = "Densité (loi de la moyenne estimée)", main = "Estimation de la moyenne")
+  lo <- max(ic[1], min(xs)); hi <- min(ic[2], max(xs)); sel <- xs >= lo & xs <= hi
+  polygon(c(lo, xs[sel], hi), c(0, ys[sel], 0), col = "#cfe0f5", border = NA); lines(xs, ys, lwd = 2)
+  abline(v = m, col = "#b03030", lwd = 2); abline(v = ic[is.finite(ic)], lty = 2, col = "#305090", lwd = 2)
+  legend("topright", bty = "n", cex = 0.85, lty = c(1, 2), lwd = 2, col = c("#b03030", "#305090"), legend = c(sprintf("moyenne = %s", fmt(m)), sprintf("limite(s) à %s", pct_txt(niv))))
+  invisible(dev.off())
+  tab <- data.frame(Serie = nom, n = n, Moyenne = m, Ecart_type = sg, Erreur_standard = se, Marge = marge,
+                    Borne_inf = ic[1], Borne_sup = ic[2], stringsAsFactors = FALSE)
+  avert <- list("L'estimation suppose des observations indépendantes issues d'une loi normale (voir le test de normalité), ou un échantillon assez grand.")
+  list(titre = "Estimation d'une moyenne — loi normale", lignes = lignes,
+       conclusion = switch(cote, two.sided = sprintf("Moyenne estimée %s, intervalle à %s : [%s ; %s]", fmt(m), pct_txt(niv), fmt(ic[1]), fmt(ic[2])),
+                           lower = sprintf("Moyenne estimée %s, supérieure à %s avec %s de confiance", fmt(m), fmt(ic[1]), pct_txt(niv)),
+                           upper = sprintf("Moyenne estimée %s, inférieure à %s avec %s de confiance", fmt(m), fmt(ic[2]), pct_txt(niv))),
+       tables = list(Estimation = tab), figures = c(fig), avertissements = avert)
+}
+
+# ---- Identification de loi -------------------------------------------------------
+GUMBEL_EULER <- 0.5772156649
+LOIS_ID <- list(
+  normale = list(lib = "Normale", noms = c("moyenne", "écart-type"), ok = function(x) TRUE,
+    fit = function(x) c(mean(x), sqrt(mean((x - mean(x))^2))),
+    cdf = function(x, q) stats::pnorm(x, q[1], q[2]), dens = function(x, q) stats::dnorm(x, q[1], q[2]),
+    quant = function(u, q) stats::qnorm(u, q[1], q[2]), rng = function(n, q) stats::rnorm(n, q[1], q[2])),
+  lognormale = list(lib = "Log-normale", noms = c("moyenne des log", "écart-type des log"), ok = function(x) all(x > 0),
+    fit = function(x) { l <- log(x); c(mean(l), sqrt(mean((l - mean(l))^2))) },
+    cdf = function(x, q) stats::plnorm(x, q[1], q[2]), dens = function(x, q) stats::dlnorm(x, q[1], q[2]),
+    quant = function(u, q) stats::qlnorm(u, q[1], q[2]), rng = function(n, q) stats::rlnorm(n, q[1], q[2])),
+  exponentielle = list(lib = "Exponentielle", noms = c("moyenne"), ok = function(x) all(x >= 0) && mean(x) > 0,
+    fit = function(x) mean(x),
+    cdf = function(x, q) stats::pexp(x, 1 / q[1]), dens = function(x, q) stats::dexp(x, 1 / q[1]),
+    quant = function(u, q) stats::qexp(u, 1 / q[1]), rng = function(n, q) stats::rexp(n, 1 / q[1])),
+  gamma = list(lib = "Gamma", noms = c("forme", "échelle"), ok = function(x) all(x > 0),
+    fit = function(x) {
+      s <- log(mean(x)) - mean(log(x)); if (!is.finite(s) || s <= 1e-12) stop("gamma")
+      k <- (3 - s + sqrt((s - 3)^2 + 24 * s)) / (12 * s)
+      for (i in 1:30) { kn <- k - (log(k) - digamma(k) - s) / (1 / k - trigamma(k)); if (!is.finite(kn) || kn <= 0) break; if (abs(kn - k) < 1e-10 * k) { k <- kn; break }; k <- kn }
+      c(k, mean(x) / k) },
+    cdf = function(x, q) stats::pgamma(x, shape = q[1], scale = q[2]), dens = function(x, q) stats::dgamma(x, shape = q[1], scale = q[2]),
+    quant = function(u, q) stats::qgamma(u, shape = q[1], scale = q[2]), rng = function(n, q) stats::rgamma(n, shape = q[1], scale = q[2])),
+  weibull = list(lib = "Weibull", noms = c("forme", "échelle"), ok = function(x) all(x > 0),
+    fit = function(x) {
+      lx <- log(x); mlx <- mean(lx)
+      f <- function(k) { xk <- exp(k * (lx - max(lx))); sum(xk * lx) / sum(xk) - 1 / k - mlx }
+      k <- stats::uniroot(f, c(0.01, 200), tol = 1e-9)$root
+      c(k, (mean(x^k))^(1 / k)) },
+    cdf = function(x, q) stats::pweibull(x, shape = q[1], scale = q[2]), dens = function(x, q) stats::dweibull(x, shape = q[1], scale = q[2]),
+    quant = function(u, q) stats::qweibull(u, shape = q[1], scale = q[2]), rng = function(n, q) stats::rweibull(n, shape = q[1], scale = q[2])),
+  logistique = list(lib = "Logistique", noms = c("position", "échelle"), ok = function(x) TRUE,
+    fit = function(x) {
+      s0 <- stats::sd(x) * sqrt(3) / pi; m0 <- stats::median(x)
+      nll <- function(t) -sum(stats::dlogis(x, t[1], exp(t[2]), log = TRUE))
+      o <- stats::optim(c(m0, log(s0)), nll, method = "BFGS"); c(o$par[1], exp(o$par[2])) },
+    cdf = function(x, q) stats::plogis(x, q[1], q[2]), dens = function(x, q) stats::dlogis(x, q[1], q[2]),
+    quant = function(u, q) stats::qlogis(u, q[1], q[2]), rng = function(n, q) stats::rlogis(n, q[1], q[2])),
+  gumbel = list(lib = "Valeur extrême (Gumbel, maximum)", noms = c("position", "échelle"), ok = function(x) TRUE,
+    fit = function(x) {
+      b0 <- stats::sd(x) * sqrt(6) / pi; a0 <- mean(x) - GUMBEL_EULER * b0
+      nll <- function(t) { b <- exp(t[2]); z <- (x - t[1]) / b; sum(log(b) + z + exp(-z)) }
+      o <- stats::optim(c(a0, log(b0)), nll, method = "BFGS"); c(o$par[1], exp(o$par[2])) },
+    cdf = function(x, q) exp(-exp(-(x - q[1]) / q[2])), dens = function(x, q) { z <- (x - q[1]) / q[2]; exp(-z - exp(-z)) / q[2] },
+    quant = function(u, q) q[1] - q[2] * log(-log(u)), rng = function(n, q) q[1] - q[2] * log(-log(stats::runif(n)))))
+
+ad_stat <- function(u) {            # statistique d'Anderson-Darling A² à partir des valeurs F(x(i)) triées
+  n <- length(u); u <- pmin(pmax(u, 1e-12), 1 - 1e-12); i <- seq_len(n)
+  -n - sum((2 * i - 1) * (log(u) + log(1 - rev(u)))) / n
+}
+ajuster_loi <- function(id, x, B, graine) {
+  L <- LOIS_ID[[id]]
+  if (!L$ok(x)) return(list(id = id, lib = L$lib, ok = FALSE, raison = "données incompatibles avec le domaine de la loi"))
+  q <- tryCatch(L$fit(x), error = function(e) NULL)
+  if (is.null(q) || any(!is.finite(q)) || (length(q) > 1 && q[2] <= 0)) return(list(id = id, lib = L$lib, ok = FALSE, raison = "ajustement impossible"))
+  xs <- sort(x); A2 <- ad_stat(L$cdf(xs, q))
+  ll <- sum(log(pmax(L$dens(x, q), 1e-300)))
+  pv <- NA_real_
+  if (B > 0 && is.finite(A2)) {
+    old <- if (exists(".Random.seed", envir = globalenv())) get(".Random.seed", envir = globalenv()) else NULL
+    on.exit(if (!is.null(old)) assign(".Random.seed", old, envir = globalenv()), add = TRUE)
+    set.seed(graine)
+    sim <- vapply(seq_len(B), function(b) {
+      xb <- L$rng(length(x), q)
+      qb <- tryCatch(L$fit(xb), error = function(e) NULL)
+      if (is.null(qb) || any(!is.finite(qb))) return(NA_real_)
+      ad_stat(L$cdf(sort(xb), qb)) }, numeric(1))
+    sim <- sim[is.finite(sim)]
+    if (length(sim) >= 20) pv <- (1 + sum(sim >= A2)) / (1 + length(sim))
+  }
+  list(id = id, lib = L$lib, ok = TRUE, q = q, A2 = A2, ll = ll, aic = 2 * length(q) - 2 * ll, p = pv, noms = L$noms)
+}
+fmt_par <- function(r) paste(sprintf("%s = %s", r$noms, fmt(r$q, 5)), collapse = " ; ")
+
+cmd_identification <- function(d, p) {
+  cols <- noms_numeriques(d, unlist(p$colonnes))
+  ids <- unlist(p$lois); if (is.null(ids) || !length(ids)) ids <- names(LOIS_ID)
+  ids <- intersect(ids, names(LOIS_ID)); if (!length(ids)) stop("Choisir au moins une loi.", call. = FALSE)
+  B <- suppressWarnings(as.integer(num(p$simulations))); if (is.na(B)) B <- 200L; B <- max(0L, min(B, 2000L))
+  lignes <- c(sprintf("Identification de loi par ajustement (maximum de vraisemblance) et test d'Anderson-Darling ; p-value par simulation (%d tirages).", B),
+              "H0 : les données suivent la loi testée. H1 : elles ne la suivent pas.", regle())
+  tabs <- list(); figs <- character(0); avert <- list(); concl <- character(0)
+  for (j in seq_along(cols)) {
+    nm <- cols[j]; x <- sans_na(d[[nm]]); n <- length(x)
+    if (n < 8) { avert <- c(avert, list(sprintf("« %s » : au moins 8 valeurs sont nécessaires (%d trouvée(s)).", nm, n))); next }
+    if (stats::sd(x) == 0) { avert <- c(avert, list(sprintf("« %s » : toutes les valeurs sont identiques.", nm))); next }
+    Bj <- if (n > 3000) min(B, 50L) else B
+    res <- lapply(ids, function(id) ajuster_loi(id, x, Bj, 20240601 + n + j))
+    ok <- Filter(function(r) r$ok, res)
+    lignes <- c(lignes, "", sprintf("── %s (n = %d)", nm, n))
+    for (r in res) if (!r$ok) lignes <- c(lignes, sprintf("  %-34s non testée : %s.", r$lib, r$raison))
+    if (!length(ok)) { avert <- c(avert, list(sprintf("« %s » : aucune loi n'a pu être ajustée.", nm))); next }
+    pvs <- vapply(ok, function(r) if (is.na(r$p)) -1 else r$p, numeric(1)); aics <- vapply(ok, function(r) r$aic, numeric(1))
+    ordre <- order(-pvs, aics); ok <- ok[ordre]
+    for (r in ok) lignes <- c(lignes, sprintf("  %-34s AD = %-9s p-value %-9s AIC = %-10s %s", r$lib, fmt(r$A2, 4), fmt_p(r$p), fmt(r$aic, 6), fmt_par(r)))
+    admis <- Filter(function(r) !is.na(r$p) && r$p >= ALPHA, ok)
+    if (length(admis)) {
+      c1 <- sprintf("« %s » : loi(s) non rejetée(s) (p ≥ α = %s) : %s ; meilleur ajustement : %s.", nm, alpha_txt(), paste(vapply(admis, function(r) r$lib, ""), collapse = ", "), admis[[1]]$lib)
+    } else c1 <- sprintf("« %s » : aucune des lois testées n'est compatible avec les données (toutes les p-values < α = %s).", nm, alpha_txt())
+    lignes <- c(lignes, "  Décision : " %+% c1); concl <- c(concl, c1)
+    tabs[[nm]] <- data.frame(Loi = vapply(ok, function(r) r$lib, ""), AD = vapply(ok, function(r) r$A2, numeric(1)),
+                             p_value = vapply(ok, function(r) r$p, numeric(1)), AIC = vapply(ok, function(r) r$aic, numeric(1)),
+                             Parametres = vapply(ok, fmt_par, ""), stringsAsFactors = FALSE)
+    # densités ajustées
+    f1 <- lire_png(sprintf("identification_%d_densites.png", j), largeur = 900, hauteur = 600)
+    par(mar = c(4.5, 4.5, 3, 1)); h <- hist(x, plot = FALSE, breaks = "FD")
+    xs <- seq(min(x), max(x), length.out = 400); cols_l <- PAL(length(ok))
+    dens <- lapply(ok, function(r) LOIS_ID[[r$id]]$dens(xs, r$q)); ymax <- max(h$density, unlist(lapply(dens, function(v) max(v[is.finite(v)], 0)))) * 1.1
+    plot(h, freq = FALSE, col = "#e6edf7", border = "white", ylim = c(0, min(ymax, max(h$density) * 3)), main = sprintf("Lois ajustées — %s", nm), xlab = nm, ylab = "Densité")
+    for (k in seq_along(ok)) lines(xs, dens[[k]], col = cols_l[k], lwd = 2)
+    legend("topright", bty = "n", cex = 0.8, lwd = 2, col = cols_l, legend = vapply(ok, function(r) sprintf("%s (p %s)", r$lib, fmt_p(r$p)), ""))
+    invisible(dev.off())
+    # diagrammes de probabilité
+    f2 <- lire_png(sprintf("identification_%d_probabilites.png", j), largeur = 900, hauteur = 640)
+    kk <- length(ok); nc <- min(3, kk); nl <- ceiling(kk / nc)
+    par(mfrow = c(nl, nc), mar = c(3.5, 3.8, 2.6, 0.8), mgp = c(2.2, 0.7, 0)); xs_ <- sort(x); pp <- (seq_len(n) - 0.5) / n
+    for (r in ok) {
+      th <- LOIS_ID[[r$id]]$quant(pp, r$q)
+      plot(th, xs_, pch = 16, cex = 0.6, col = "#305090", xlab = "Quantiles théoriques", ylab = "Données", main = sprintf("%s  (p %s)", r$lib, fmt_p(r$p)), cex.main = 0.95)
+      abline(0, 1, col = "#b03030", lwd = 2)
+    }
+    invisible(dev.off())
+    figs <- c(figs, f1, f2)
+  }
+  if (!length(tabs)) stop(if (length(avert)) paste(unlist(avert), collapse = " ") else "Aucune série exploitable.", call. = FALSE)
+  list(titre = "Identification de loi", lignes = lignes, conclusion = paste(concl, collapse = " "), tables = tabs, figures = figs,
+       avertissements = c(avert, list("Les paramètres sont estimés à partir des données : la p-value est donc calculée par simulation (bootstrap paramétrique). Un échantillon petit ne distingue pas bien plusieurs lois voisines ; utiliser aussi les diagrammes de probabilité.")))
+}
+`%+%` <- function(a, b) paste0(a, b)
+
+# =============================================================================
+#  Lot 3 — Corrélation, régression, séries chronologiques
+# =============================================================================
+# ---- Corrélation ---------------------------------------------------------------
+cmd_correlation <- function(d, p) {
+  cols <- noms_numeriques(d, unlist(p$colonnes))
+  if (length(cols) < 2) stop("Sélectionner au moins deux séries numériques.", call. = FALSE)
+  meth <- if (isTRUE(p$methode %in% c("spearman", "kendall"))) p$methode else "pearson"
+  lib_m <- c(pearson = "Pearson (linéaire)", spearman = "Spearman (rangs, monotone)", kendall = "Kendall (rangs)")[[meth]]
+  k <- length(cols); paires <- list(); R <- matrix(NA_real_, k, k, dimnames = list(cols, cols)); P <- R; diag(R) <- 1; diag(P) <- 0
+  lignes <- c(sprintf("Corrélation de %s — %d séries.", lib_m, k),
+              if (meth == "pearson") "H0 : ρ = 0 (pas de corrélation linéaire entre les deux séries). H1 : ρ ≠ 0." else "H0 : pas d'association monotone entre les deux séries. H1 : association monotone.",
+              regle())
+  for (i in 1:(k - 1)) for (j in (i + 1):k) {
+    ok <- is.finite(d[[cols[i]]]) & is.finite(d[[cols[j]]]); x <- d[[cols[i]]][ok]; y <- d[[cols[j]]][ok]; n <- length(x)
+    if (n < 3 || stats::sd(x) == 0 || stats::sd(y) == 0) { paires[[length(paires) + 1]] <- data.frame(Serie_1 = cols[i], Serie_2 = cols[j], n = n, r = NA_real_, p_value = NA_real_, Borne_inf = NA_real_, Borne_sup = NA_real_, Decision = "non calculable", stringsAsFactors = FALSE); next }
+    ct <- suppressWarnings(stats::cor.test(x, y, method = meth, exact = FALSE, conf.level = 1 - ALPHA))
+    r <- unname(ct$estimate); pv <- ct$p.value; R[i, j] <- R[j, i] <- r; P[i, j] <- P[j, i] <- pv
+    ic <- if (meth == "pearson") as.numeric(ct$conf.int) else c(NA_real_, NA_real_)
+    forc <- if (abs(r) >= 0.8) "forte" else if (abs(r) >= 0.5) "modérée" else if (abs(r) >= 0.3) "faible" else "très faible"
+    dec <- if (pv < ALPHA) sprintf("H0 rejetée : corrélation %s, %s", forc, if (r > 0) "positive" else "négative") else "H0 non rejetée : aucune corrélation mise en évidence"
+    lignes <- c(lignes, sprintf("%s × %s (n = %d) : r = %s ; p-value %s%s → %s.", cols[i], cols[j], n, fmt(r, 4), fmt_p(pv),
+                                if (meth == "pearson") sprintf(" ; IC à %s [%s ; %s]", conf_txt(), fmt(ic[1], 4), fmt(ic[2], 4)) else "", dec))
+    paires[[length(paires) + 1]] <- data.frame(Serie_1 = cols[i], Serie_2 = cols[j], n = n, r = r, p_value = pv, Borne_inf = ic[1], Borne_sup = ic[2],
+                                               Decision = if (pv < ALPHA) "H0 rejetée" else "H0 non rejetée", stringsAsFactors = FALSE)
+  }
+  mat <- data.frame(Serie = cols, as.data.frame(R), stringsAsFactors = FALSE, check.names = FALSE)
+  nfig <- min(k, 8); cf <- cols[seq_len(nfig)]
+  fig <- lire_png("correlation.png", largeur = 900, hauteur = 800)
+  panneau_haut <- function(x, y, ...) {
+    ok <- is.finite(x) & is.finite(y); r <- if (sum(ok) > 2) stats::cor(x[ok], y[ok], method = meth) else NA
+    usr <- par("usr"); on.exit(par(usr = usr)); par(usr = c(0, 1, 0, 1))
+    text(0.5, 0.5, fmt(r, 3), cex = 1.2 + 1.2 * abs(ifelse(is.na(r), 0, r)), col = if (!is.na(r) && abs(r) >= 0.5) "#b03030" else "#444444")
+  }
+  panneau_bas <- function(x, y, ...) { points(x, y, pch = 19, cex = 0.5, col = "#2a5d9f80"); ok <- is.finite(x) & is.finite(y); if (sum(ok) > 4) lines(stats::lowess(x[ok], y[ok]), col = "#b03030", lwd = 1.5) }
+  graphics::pairs(d[cf], upper.panel = panneau_haut, lower.panel = panneau_bas, gap = 0.4, main = sprintf("Matrice de corrélation — %s", lib_m))
+  invisible(dev.off())
+  avert <- list("Une corrélation n'établit pas une relation de cause à effet. Examiner le nuage de points : un point isolé ou une relation courbe peuvent fausser r.")
+  if (k > nfig) avert <- c(avert, list(sprintf("Matrice graphique limitée aux %d premières séries.", nfig)))
+  list(titre = sprintf("Corrélation — %s", lib_m), lignes = lignes,
+       conclusion = sprintf("%d paire(s) analysée(s), %d corrélation(s) significative(s) au risque α = %s.", length(paires), sum(vapply(paires, function(t) isTRUE(t$p_value < ALPHA), logical(1))), alpha_txt()),
+       tables = list(Paires = do.call(rbind, paires), Matrice_r = mat), figures = c(fig), avertissements = avert)
+}
+
+# ---- Régression --------------------------------------------------------------------
+cmd_regression <- function(d, p) {
+  yn <- nom_colonne(d, p$y, "Réponse (Y)"); xs <- unlist(p$x)
+  if (is.null(xs) || !length(xs)) stop("Choisir au moins une variable explicative (X).", call. = FALSE)
+  if (yn %in% xs) stop("La réponse ne peut pas être aussi une variable explicative.", call. = FALSE)
+  for (nm in c(yn, xs)) col_num(d, nm)
+  deg <- suppressWarnings(as.integer(num(p$degre))); if (is.na(deg)) deg <- 1L
+  if (deg < 1 || deg > 3) stop("Le degré du polynôme doit être 1, 2 ou 3.", call. = FALSE)
+  if (deg > 1 && length(xs) > 1) stop("Un polynôme (degré 2 ou 3) n'est possible qu'avec une seule variable explicative.", call. = FALSE)
+  ok <- stats::complete.cases(d[c(yn, xs)]) & is.finite(rowSums(d[c(yn, xs)]))
+  df <- d[ok, c(yn, xs), drop = FALSE]; n <- nrow(df)
+  X <- if (deg == 1) as.matrix(df[xs]) else sapply(seq_len(deg), function(k) df[[xs]]^k)
+  noms_t <- if (deg == 1) xs else c(xs, paste0(xs, c("²", "³")[seq_len(deg - 1)]))
+  colnames(X) <- noms_t
+  q <- ncol(X)
+  if (n < q + 3) stop(sprintf("Trop peu d'observations complètes (%d) pour %d coefficient(s) et la constante.", n, q), call. = FALSE)
+  dm <- data.frame(Y = df[[yn]], X, check.names = FALSE); names(dm)[-1] <- paste0("V", seq_len(q))
+  fit <- stats::lm(Y ~ ., data = dm)
+  sm <- summary(fit); co <- sm$coefficients; rownames(co) <- c("Constante", noms_t)
+  qt_ <- stats::qt(1 - ALPHA / 2, fit$df.residual); ic <- cbind(co[, 1] - qt_ * co[, 2], co[, 1] + qt_ * co[, 2])
+  s <- sm$sigma; r2 <- sm$r.squared; r2a <- sm$adj.r.squared
+  fs <- sm$fstatistic; pF <- stats::pf(fs[1], fs[2], fs[3], lower.tail = FALSE)
+  sct <- sum((dm$Y - mean(dm$Y))^2); sce <- sum(fit$residuals^2); scr <- sct - sce
+  anova_t <- data.frame(Source = c("Régression", "Erreur résiduelle", "Total"), ddl = c(q, fit$df.residual, n - 1), SC = c(scr, sce, sct),
+                        CM = c(scr / q, sce / fit$df.residual, NA), F = c(unname(fs[1]), NA, NA), p_value = c(pF, NA, NA), stringsAsFactors = FALSE)
+  res <- fit$residuals; hat <- stats::hatvalues(fit); rst <- stats::rstandard(fit); cook <- stats::cooks.distance(fit)
+  dw <- sum(diff(res)^2) / sum(res^2)
+  vif <- if (q > 1 && deg == 1) vapply(seq_len(q), function(j) { r2j <- summary(stats::lm(X[, j] ~ X[, -j, drop = FALSE]))$r.squared; 1 / (1 - r2j) }, numeric(1)) else rep(NA_real_, q)
+  coef_t <- data.frame(Terme = rownames(co), Coefficient = co[, 1], Erreur_standard = co[, 2], t = co[, 3], p_value = co[, 4],
+                       Borne_inf = ic[, 1], Borne_sup = ic[, 2], VIF = c(NA, vif), Significatif = ifelse(co[, 4] < ALPHA, "oui", "non"), stringsAsFactors = FALSE)
+  eq_terms <- paste(sprintf("%s %s × %s", ifelse(co[-1, 1] < 0, "−", "+"), fmt(abs(co[-1, 1]), 5), noms_t))
+  equation <- sprintf("%s = %s %s", yn, fmt(co[1, 1], 5), paste(eq_terms, collapse = " "))
+  sw <- if (n >= 3 && n <= 5000) stats::shapiro.test(res)$p.value else NA_real_
+  atyp <- which(abs(rst) > 2 | hat > 3 * (q + 1) / n | cook > 4 / n)
+  lignes <- c(sprintf("Régression %s de « %s » en fonction de %s (n = %d).", if (deg > 1) sprintf("polynomiale de degré %d", deg) else if (q > 1) "linéaire multiple" else "linéaire simple", yn, paste0("« ", xs, " »", collapse = ", "), n),
+              "Test global — H0 : tous les coefficients (hors constante) sont nuls ; H1 : au moins un coefficient est différent de 0.", regle(),
+              sprintf("Équation : %s", equation),
+              sprintf("S (écart-type résiduel) = %s ; R² = %s ; R² ajusté = %s", fmt(s, 5), pct_txt(r2), pct_txt(r2a)),
+              sprintf("F = %s (ddl %d ; %d) ; p-value %s", fmt(unname(fs[1])), q, fit$df.residual, fmt_p(pF)),
+              decision(pF, "le modèle n'explique pas significativement la réponse.", "le modèle explique significativement la réponse."),
+              "Coefficients — H0 : le coefficient est nul ; H1 : il est différent de 0.")
+  for (i in seq_len(nrow(co))) lignes <- c(lignes, sprintf("  %-22s %12s   p-value %-9s → %s", rownames(co)[i], fmt(co[i, 1], 5), fmt_p(co[i, 4]), if (co[i, 4] < ALPHA) "H0 rejetée (coefficient significatif)" else "H0 non rejetée"))
+  lignes <- c(lignes, sprintf("Durbin-Watson = %s (proche de 2 : pas d'autocorrélation des résidus dans l'ordre des données).", fmt(dw, 4)),
+              if (!is.na(sw)) sprintf("Normalité des résidus (Shapiro-Wilk) : p-value %s → %s", fmt_p(sw), if (sw >= ALPHA) "H0 non rejetée : normalité non rejetée" else "H0 rejetée : les résidus s'écartent de la loi normale") else "Normalité des résidus : non testée.",
+              if (length(atyp)) sprintf("%d observation(s) inhabituelle(s) (résidu standardisé > 2 en valeur absolue, levier élevé ou distance de Cook élevée) : lignes %s.", length(atyp), paste(utils::head(which(ok)[atyp], 12), collapse = ", ")) else "Aucune observation inhabituelle.")
+  if (any(vif > 10, na.rm = TRUE)) lignes <- c(lignes, "VIF > 10 : variables explicatives fortement liées entre elles (multicolinéarité), coefficients peu fiables.")
+  # --- graphique d'ajustement
+  f1 <- lire_png("regression_ajustement.png", largeur = 900, hauteur = 600)
+  par(mar = c(4.5, 4.5, 3, 1))
+  if (length(xs) == 1) {
+    x <- df[[xs]]; g <- seq(min(x), max(x), length.out = 200)
+    nd <- data.frame(sapply(seq_len(deg), function(k) g^k)); names(nd) <- paste0("V", seq_len(deg))
+    pc <- stats::predict(fit, nd, interval = "confidence", level = 1 - ALPHA); pp <- stats::predict(fit, nd, interval = "prediction", level = 1 - ALPHA)
+    plot(x, df[[yn]], pch = 19, col = "#2a5d9f", xlab = xs, ylab = yn, main = sprintf("Ajustement — %s", yn), ylim = range(c(df[[yn]], pp), finite = TRUE))
+    polygon(c(g, rev(g)), c(pp[, 2], rev(pp[, 3])), col = "#f3e3cc", border = NA); polygon(c(g, rev(g)), c(pc[, 2], rev(pc[, 3])), col = "#cfe0f5", border = NA)
+    points(x, df[[yn]], pch = 19, col = "#2a5d9f"); lines(g, pc[, 1], col = "#b03030", lwd = 2)
+    legend("topleft", bty = "n", cex = 0.8, fill = c("#cfe0f5", "#f3e3cc"), border = NA, legend = c(sprintf("intervalle de confiance à %s", conf_txt()), sprintf("intervalle de prédiction à %s", conf_txt())))
+  } else {
+    pr <- stats::fitted(fit); plot(pr, df[[yn]], pch = 19, col = "#2a5d9f", xlab = "Valeurs ajustées", ylab = yn, main = "Valeurs observées et ajustées"); abline(0, 1, col = "#b03030", lwd = 2)
+  }
+  invisible(dev.off())
+  # --- résidus (4 graphiques)
+  f2 <- lire_png("regression_residus.png", largeur = 900, hauteur = 700)
+  par(mfrow = c(2, 2), mar = c(4, 4.2, 2.6, 1))
+  qq <- stats::qqnorm(rst, plot.it = FALSE); plot(qq$x, qq$y, pch = 19, cex = 0.7, col = "#2a5d9f", xlab = "Quantiles normaux", ylab = "Résidus standardisés", main = "Droite de Henry des résidus"); abline(0, 1, col = "#b03030", lwd = 2)
+  plot(stats::fitted(fit), rst, pch = 19, cex = 0.7, col = "#2a5d9f", xlab = "Valeurs ajustées", ylab = "Résidus standardisés", main = "Résidus et valeurs ajustées"); abline(h = c(-2, 0, 2), lty = c(3, 2, 3), col = "#b03030")
+  hist(rst, col = "#cfe0f5", border = "white", main = "Histogramme des résidus", xlab = "Résidus standardisés", ylab = "Effectif")
+  plot(seq_len(n), rst, type = "b", pch = 19, cex = 0.6, col = "#2a5d9f", xlab = "Ordre des observations", ylab = "Résidus standardisés", main = "Résidus et ordre"); abline(h = c(-2, 0, 2), lty = c(3, 2, 3), col = "#b03030")
+  invisible(dev.off())
+  dec <- decision(pF, "le modèle n'explique pas significativement la réponse.", "le modèle explique significativement la réponse.")
+  list(titre = "Régression", lignes = lignes,
+       conclusion = sprintf("%s ; R² = %s, R² ajusté = %s.", sub("^Décision : ", "", sub("\\.$", "", dec)), pct_txt(r2), pct_txt(r2a)),
+       tables = list(Coefficients = coef_t, Analyse_de_variance = anova_t), figures = c(f1, f2),
+       avertissements = list("Vérifier les hypothèses sur les résidus (indépendance, normalité, variance constante) avec les graphiques. Une relation statistique n'est pas une relation de cause à effet ; éviter d'extrapoler hors de l'étendue des données."))
+}
+
+# ---- Séries chronologiques et tendances ------------------------------------------------
+MODELES_TENDANCE <- c(lineaire = "Linéaire", quadratique = "Quadratique", exponentielle = "Exponentielle (croissance)", logistique = "Logistique (courbe en S)")
+ajuster_tendance <- function(id, t, y) {
+  if (id == "lineaire") { f <- stats::lm(y ~ t); sm <- summary(f); co <- sm$coefficients
+    list(predict = function(tt, interval = FALSE) { if (interval) stats::predict(f, data.frame(t = tt), interval = "prediction", level = 1 - ALPHA) else as.numeric(stats::predict(f, data.frame(t = tt))) },
+         eq = sprintf("Y = %s %s %s × t", fmt(co[1, 1], 5), if (co[2, 1] < 0) "−" else "+", fmt(abs(co[2, 1]), 5)),
+         test = list(lib = "pente (tendance linéaire)", p = co[2, 4], coef = co[2, 1]), k = 2) }
+  else if (id == "quadratique") { f <- stats::lm(y ~ t + I(t^2)); sm <- summary(f); co <- sm$coefficients
+    list(predict = function(tt, interval = FALSE) { if (interval) stats::predict(f, data.frame(t = tt), interval = "prediction", level = 1 - ALPHA) else as.numeric(stats::predict(f, data.frame(t = tt))) },
+         eq = sprintf("Y = %s %s %s × t %s %s × t²", fmt(co[1, 1], 5), if (co[2, 1] < 0) "−" else "+", fmt(abs(co[2, 1]), 5), if (co[3, 1] < 0) "−" else "+", fmt(abs(co[3, 1]), 5)),
+         test = list(lib = "terme quadratique (courbure)", p = co[3, 4], coef = co[3, 1]), k = 3) }
+  else if (id == "exponentielle") { if (any(y <= 0)) stop("toutes les valeurs doivent être strictement positives.", call. = FALSE)
+    f <- stats::lm(log(y) ~ t); sm <- summary(f); co <- sm$coefficients; s2 <- sm$sigma^2
+    list(predict = function(tt, interval = FALSE) { if (interval) { pr <- stats::predict(f, data.frame(t = tt), interval = "prediction", level = 1 - ALPHA); exp(pr) } else exp(as.numeric(stats::predict(f, data.frame(t = tt)))) },
+         eq = sprintf("Y = %s × exp(%s × t)  (taux de croissance par période : %s)", fmt(exp(co[1, 1]), 5), fmt(co[2, 1], 5), pct_txt(exp(co[2, 1]) - 1)),
+         test = list(lib = "pente du logarithme (croissance exponentielle)", p = co[2, 4], coef = co[2, 1]), k = 2) }
+  else { if (any(y <= 0)) stop("toutes les valeurs doivent être strictement positives.", call. = FALSE)
+    K0 <- max(y) * 1.05; z <- log(y / (K0 - y)); l0 <- stats::lm(z ~ t); r0 <- unname(stats::coef(l0)[2]); t00 <- -unname(stats::coef(l0)[1]) / r0
+    if (!is.finite(r0) || r0 == 0 || !is.finite(t00)) stop("ajustement impossible.", call. = FALSE)
+    par_ <- c(K = K0, r = r0, t0 = t00); approx <- TRUE
+    fn <- tryCatch(stats::nls(y ~ K / (1 + exp(-r * (t - t0))), start = as.list(par_), control = stats::nls.control(maxiter = 300, warnOnly = FALSE)), error = function(e) NULL)
+    if (!is.null(fn)) { par_ <- stats::coef(fn); approx <- FALSE }
+    list(predict = function(tt, interval = FALSE) { v <- par_[["K"]] / (1 + exp(-par_[["r"]] * (tt - par_[["t0"]]))); if (interval) cbind(fit = v, lwr = NA_real_, upr = NA_real_) else v },
+         eq = sprintf("Y = %s / (1 + exp(−%s × (t − %s)))  (asymptote %s)%s", fmt(par_[["K"]], 5), fmt(par_[["r"]], 5), fmt(par_[["t0"]], 5), fmt(par_[["K"]], 5), if (approx) " — ajustement approché" else ""),
+         test = NULL, k = 3) }
+}
+cmd_serie <- function(d, p) {
+  yn <- nom_colonne(d, p$y, "Série"); col_num(d, yn)
+  nom_o <- NULL; lab <- NULL
+  if (!is.null(p$ordre) && nzchar(p$ordre)) { nom_o <- nom_colonne(d, p$ordre, "Colonne d'ordre"); d <- d[order(d[[nom_o]], na.last = TRUE), , drop = FALSE]; lab <- etiq_ordre(d[[nom_o]]) }
+  y_all <- d[[yn]]; t_all <- seq_along(y_all); ok <- is.finite(y_all); y <- y_all[ok]; t <- t_all[ok]; n <- length(y)
+  if (n < 6) stop(sprintf("Au moins 6 valeurs sont nécessaires pour analyser une tendance (%d trouvée(s)).", n), call. = FALSE)
+  ids <- intersect(unlist(p$modeles), names(MODELES_TENDANCE)); if (!length(ids)) ids <- "lineaire"
+  h <- suppressWarnings(as.integer(num(p$horizon))); if (is.na(h) || h < 0) h <- 0L; h <- min(h, 500L)
+  lignes <- c(sprintf("Analyse de tendance de « %s » (%d points%s).", yn, n, if (!is.null(nom_o)) sprintf(", ordonnés selon « %s »", nom_o) else ", dans l'ordre des données"),
+              "Test de tendance — H0 : le coefficient de tendance est nul (pas de tendance) ; H1 : il est différent de 0.", regle())
+  mod <- list(); avert <- list(); tab <- list()
+  for (id in ids) {
+    m <- tryCatch(ajuster_tendance(id, t, y), error = function(e) { avert <<- c(avert, list(sprintf("%s : %s", MODELES_TENDANCE[[id]], conditionMessage(e)))); NULL })
+    if (is.null(m)) next
+    fit <- m$predict(t); e <- y - fit
+    mape <- if (any(y == 0)) NA_real_ else mean(abs(e / y)) * 100; mad <- mean(abs(e)); msd <- mean(e^2); r2 <- 1 - sum(e^2) / sum((y - mean(y))^2)
+    mod[[id]] <- m
+    tab[[length(tab) + 1]] <- data.frame(Modele = MODELES_TENDANCE[[id]], MAPE = mape, MAD = mad, MSD = msd, R2 = r2, Equation = m$eq, stringsAsFactors = FALSE)
+    lignes <- c(lignes, "", sprintf("── Modèle %s", sub("^(.)", "\\L\\1", MODELES_TENDANCE[[id]], perl = TRUE)), sprintf("  Équation : %s", m$eq),
+                sprintf("  Précision : MAPE = %s %% ; MAD = %s ; MSD = %s ; R² = %s", fmt(mape, 4), fmt(mad, 5), fmt(msd, 5), pct_txt(r2)))
+    if (!is.null(m$test)) lignes <- c(lignes, sprintf("  Test — %s : p-value %s → %s", m$test$lib, fmt_p(m$test$p),
+                                                      if (m$test$p < ALPHA) sprintf("H0 rejetée : %s (coefficient %s)", if (id == "quadratique") "courbure significative" else "tendance significative", fmt(m$test$coef, 4)) else "H0 non rejetée : tendance non démontrée"))
+  }
+  if (!length(mod)) stop(paste(unlist(avert), collapse = " "), call. = FALSE)
+  tabm <- do.call(rbind, tab); meilleur <- tabm$Modele[which.min(tabm$MSD)]
+  if (length(mod) > 1) lignes <- c(lignes, "", sprintf("Meilleur ajustement (MSD le plus faible) : %s. Un modèle plus souple ajuste toujours mieux : juger aussi la forme du graphique et la logique du phénomène.", meilleur))
+  # prévisions
+  tabs <- list(Modeles = tabm)
+  if (h > 0) {
+    tf <- max(t_all) + seq_len(h)
+    pv <- data.frame(Periode = paste0("+", seq_len(h)), stringsAsFactors = FALSE)
+    for (id in names(mod)) { pr <- mod[[id]]$predict(tf, TRUE); pv[[MODELES_TENDANCE[[id]]]] <- pr[, 1]; if (!anyNA(pr[, 2])) { pv[[paste0(MODELES_TENDANCE[[id]], " (borne inf.)")]] <- pr[, 2]; pv[[paste0(MODELES_TENDANCE[[id]], " (borne sup.)")]] <- pr[, 3] } }
+    tabs$Previsions <- pv
+    lignes <- c(lignes, "", sprintf("Prévisions sur %d période(s) : voir le tableau « Previsions » (intervalles de prédiction à %s pour les modèles linéaire, quadratique et exponentiel).", h, conf_txt()))
+  }
+  # graphique
+  ntot <- length(y_all) + h; cols_m <- PAL(length(mod) + 1)
+  longues <- !is.null(lab) && max(nchar(lab), 0, na.rm = TRUE) > 8
+  fig <- lire_png("serie_tendance.png", largeur = 950, hauteur = 600 + if (longues) 160 else 0)
+  par(mar = c(if (longues) 9 else 4.5, 4.5, 3, 1))
+  gt <- seq(min(t), max(t_all) + h, length.out = 300)
+  courbes <- lapply(mod, function(m) m$predict(gt))
+  yl <- range(c(y, unlist(courbes)), finite = TRUE); mg <- diff(yl) * 0.08; yl <- yl + c(-mg, mg)
+  plot(t_all, y_all, type = "n", xaxt = "n", xlab = if (longues) "" else if (is.null(nom_o)) "Période" else nom_o, ylab = yn, main = sprintf("Tendance — %s", yn), xlim = c(1, ntot), ylim = yl)
+  etq <- if (!is.null(lab)) c(lab, rep(NA, h)) else as.character(seq_len(ntot)); etq[length(y_all) + seq_len(h)] <- if (h > 0) paste0("+", seq_len(h)) else character(0)
+  idx <- if (ntot <= (if (longues) 20 else 30)) seq_len(ntot) else unique(round(seq(1, ntot, length.out = if (longues) 14 else 15)))
+  axis(1, at = idx, labels = etq[idx], las = if (ntot > 15 || longues) 2 else 1, cex.axis = 0.8)
+  if (longues) mtext(if (is.null(nom_o)) "Période" else nom_o, side = 1, line = par("mar")[1] - 1.3)
+  if (h > 0) abline(v = length(y_all) + 0.5, lty = 3, col = "#888888")
+  lines(t_all, y_all, col = "#2a5d9f", lwd = 1.2); points(t, y, pch = 19, cex = 0.8, col = "#2a5d9f")
+  if (length(mod) == 1 && h > 0) { pr <- mod[[1]]$predict(max(t_all) + seq_len(h), TRUE); if (!anyNA(pr[, 2])) polygon(c(max(t_all) + seq_len(h), rev(max(t_all) + seq_len(h))), c(pr[, 2], rev(pr[, 3])), col = "#f3e3cc80", border = NA) }
+  k <- 0; for (id in names(mod)) { k <- k + 1; lines(gt, courbes[[id]], col = cols_m[k], lwd = 2) }
+  legend("topleft", bty = "n", cex = 0.8, lwd = c(1.2, rep(2, length(mod))), col = c("#2a5d9f", cols_m[seq_along(mod)]), legend = c("Données", MODELES_TENDANCE[names(mod)]))
+  invisible(dev.off())
+  conc <- sprintf("%d modèle(s) de tendance ajusté(s) ; meilleur MSD : %s.", length(mod), meilleur)
+  if (!is.null(mod$lineaire$test)) conc <- paste(conc, if (mod$lineaire$test$p < ALPHA) sprintf("Tendance linéaire significative (p-value %s < α = %s).", fmt_p(mod$lineaire$test$p), alpha_txt()) else sprintf("Tendance linéaire non démontrée (p-value %s ≥ α = %s).", fmt_p(mod$lineaire$test$p), alpha_txt()))
+  list(titre = "Séries chronologiques — tendances", lignes = lignes, conclusion = conc, tables = tabs, figures = c(fig),
+       avertissements = c(avert, list("Les tendances ignorent la saisonnalité et l'autocorrélation : à utiliser comme description générale. Éviter de prévoir trop loin de la dernière observation.")))
+}
+
+# =============================================================================
+#  Lot 4 — Cartes de contrôle aux attributs (p et u), avec phases
+# =============================================================================
+cmd_carte_attributs <- function(d, p) {
+  type <- if (identical(p$type, "u")) "u" else "p"
+  tests <- suppressWarnings(as.integer(unlist(p$tests))); tests <- tests[!is.na(tests) & tests >= 1 & tests <= 8]
+  if (!length(p$tests)) tests <- 1:4
+  lab <- NULL; nom_o <- NULL
+  if (!is.null(p$ordre) && nzchar(p$ordre)) { nom_o <- nom_colonne(d, p$ordre, "Colonne d'ordre"); d <- d[order(d[[nom_o]], na.last = TRUE), , drop = FALSE]; lab <- etiq_ordre(d[[nom_o]]) }
+  dn <- nom_colonne(d, p$defauts, if (type == "p") "Colonne des unités défectueuses" else "Colonne des défauts"); x <- col_num(d, dn)
+  if (!is.null(p$effectif) && nzchar(p$effectif)) { en <- nom_colonne(d, p$effectif, "Colonne des effectifs"); n <- col_num(d, en)
+  } else { nc <- num(p$n); if (is.na(nc) || nc <= 0) stop("Choisir la colonne des effectifs contrôlés, ou saisir un effectif constant.", call. = FALSE); en <- NULL; n <- rep(nc, length(x)) }
+  ph_rows <- NULL
+  if (!is.null(p$phase) && nzchar(p$phase)) { pn <- nom_colonne(d, p$phase, "Colonne de phases"); ph_rows <- as.character(d[[pn]]) }
+  ok <- is.finite(x) & is.finite(n)
+  x <- x[ok]; n <- n[ok]; k <- length(x)
+  etiq <- if (!is.null(lab)) lab[ok] else as.character(seq_len(k))
+  ph <- if (!is.null(ph_rows)) ph_rows[ok] else NULL
+  if (k < 2) stop("Il faut au moins 2 points pour construire une carte de contrôle.", call. = FALSE)
+  if (any(x < 0) || any(abs(x - round(x)) > 1e-8)) stop("Les nombres de défauts ou d'unités défectueuses doivent être des entiers positifs ou nuls.", call. = FALSE)
+  if (any(n <= 0)) stop("Les effectifs contrôlés doivent être strictement positifs.", call. = FALSE)
+  if (type == "p" && any(x > n)) stop(sprintf("Ligne %d : le nombre d'unités défectueuses dépasse l'effectif contrôlé.", which(x > n)[1]), call. = FALSE)
+  rupt <- num(p$rupture)
+  if (is.null(ph) && !is.na(rupt)) ph <- ifelse(seq_len(k) < rupt, "Avant", "Après")
+  if (!is.null(ph)) { ph <- as.character(ph); ph[is.na(ph)] <- "(vide)" }
+  niv <- if (is.null(ph)) NULL else unique(ph)
+  idx <- if (is.null(ph)) list(seq_len(k)) else lapply(niv, function(l) which(ph == l))
+  if (!is.null(ph) && length(niv) < 2) { ph <- NULL; niv <- NULL; idx <- list(seq_len(k)) }
+  y <- x / n; cl <- lcl <- ucl <- sg <- rep(NA_real_, k)
+  for (j in seq_along(idx)) {
+    ix <- idx[[j]]
+    if (length(ix) < 2) stop(sprintf("La phase « %s » ne contient qu'un point : il en faut au moins 2 par phase.", niv[j]), call. = FALSE)
+    cb <- sum(x[ix]) / sum(n[ix]); cl[ix] <- cb
+    if (type == "p") { if (cb <= 0 || cb >= 1) stop(sprintf("%s : la proportion moyenne est %s, aucune limite de contrôle n'est calculable.", if (is.null(ph)) "Carte p" else sprintf("Phase « %s »", niv[j]), fmt(cb)), call. = FALSE); sg[ix] <- sqrt(cb * (1 - cb) / n[ix]) }
+    else { if (cb <= 0) stop(sprintf("%s : aucun défaut observé, aucune limite de contrôle n'est calculable.", if (is.null(ph)) "Carte u" else sprintf("Phase « %s »", niv[j])), call. = FALSE); sg[ix] <- sqrt(cb / n[ix]) }
+    ucl[ix] <- cl[ix] + 3 * sg[ix]; lcl[ix] <- cl[ix] - 3 * sg[ix]
+  }
+  lcl <- pmax(lcl, 0); if (type == "p") ucl <- pmin(ucl, 1)
+  sig1 <- list()
+  fusion <- function(a, b) { for (nm in names(b)) a[[nm]] <- c(a[[nm]], b[[nm]]); a }
+  for (ix in idx) { r <- tests_causes_speciales(y[ix], cl[ix], sg[ix], tests); sig1 <- fusion(sig1, lapply(r, function(v) ix[v])) }
+  sig1 <- sig1[order(as.integer(names(sig1)))]
+  nsig <- length(unique(unlist(sig1)))
+  marque <- function(s, kk) { r <- character(kk); for (t in names(s)) r[s[[t]]] <- ifelse(nzchar(r[s[[t]]]), paste0(r[s[[t]]], ",", t), t); r }
+  nom <- if (type == "p") "Proportion d'unités défectueuses (carte p)" else "Défauts par unité (carte u)"
+  longues <- !is.null(lab) && max(nchar(lab), 0, na.rm = TRUE) > 8
+  fig <- lire_png("carte_attributs.png", largeur = max(900, min(2000, 20 * k + 500)), hauteur = 560 + if (longues) 160 else 0)
+  par(mar = c(4.5, 4.5, 2.5, 7))
+  trace_carte(nom, etiq, y, cl, lcl, ucl, sg, sig1, if (type == "p") "Proportion" else "Défauts par unité", any(tests %in% 5:8), if (!is.null(nom_o)) nom_o else "Échantillon", ph)
+  invisible(dev.off())
+  lignes <- c(sprintf("Carte %s — %d points%s.", type, k, if (!is.null(en)) sprintf(", effectif variable (colonne « %s »)", en) else sprintf(", effectif constant de %s", fmt(n[1]))))
+  if (is.null(ph)) lignes <- c(lignes, sprintf("%s : %s ; LIC = %s ; LSC = %s%s", if (type == "p") "Proportion moyenne" else "Taux moyen", fmt(cl[1], 6), fmt(lcl[1], 6), fmt(ucl[1], 6), if (length(unique(n)) > 1) " (limites variables, valeurs du premier point)" else ""))
+  else for (j in seq_along(idx)) { i1 <- idx[[j]][1]; lignes <- c(lignes, sprintf("Phase « %s » (%d points) : moyenne = %s ; LIC = %s ; LSC = %s", niv[j], length(idx[[j]]), fmt(cl[i1], 6), fmt(lcl[i1], 6), fmt(ucl[i1], 6))) }
+  concl <- if (nsig == 0) sprintf("Aucun signal de cause spéciale (tests %s) : le procédé paraît sous contrôle statistique.", paste(tests, collapse = ", "))
+           else sprintf("%d point(s) en signal de cause spéciale (tests %s) : le procédé n'est pas stable.", nsig, paste(names(sig1), collapse = ", "))
+  lignes <- c(lignes, "", concl, if (length(sig1)) vapply(names(sig1), function(t) sprintf("Test %s : %s", t, paste(etiq[sig1[[t]]], collapse = ", ")), ""))
+  hors <- sum(y > ucl | y < lcl)
+  avert <- list()
+  if (length(unique(n)) > 1 && max(n) / min(n) > 4) avert <- c(avert, list("Les effectifs varient beaucoup : les limites varient d'un point à l'autre (carte à limites variables)."))
+  if (k < 20) avert <- c(avert, list(sprintf("Seulement %d points : on recommande au moins 20 à 25 points pour établir des limites de contrôle fiables.", k)))
+  if (hors > 0.1 * k && k >= 20) avert <- c(avert, list("Beaucoup de points hors limites : une variabilité supérieure à la loi binomiale/de Poisson (surdispersion) est possible ; en tenir compte avant de conclure à des causes spéciales."))
+  if (type == "p") avert <- c(avert, list("Carte p : unités défectueuses par échantillon (loi binomiale). Pour compter plusieurs défauts par unité, utiliser la carte u."))
+  tab <- data.frame(Echantillon = etiq, n = n, Comptage = x, Valeur = y, LIC = lcl, LC = cl, LSC = ucl, Tests = marque(sig1, k), stringsAsFactors = FALSE)
+  if (!is.null(ph)) tab <- cbind(Phase = ph, tab)
+  tt <- if (type == "p") "Carte de contrôle p (proportion d'unités défectueuses)" else "Carte de contrôle u (défauts par unité)"
+  if (!is.null(ph)) tt <- paste0(tt, sprintf(" — %d phases (%s)", length(idx), paste(niv, collapse = " / ")))
+  list(titre = tt, lignes = lignes, conclusion = concl, tables = list(Carte = tab), figures = c(fig), avertissements = avert)
+}
+
+# =============================================================================
+#  Lot 4 — Graphiques
+# =============================================================================
+# Séries à représenter : colonnes numériques sélectionnées, ou « valeur » découpée selon une colonne de groupes.
+series_graphique <- function(d, p) {
+  gn <- if (!is.null(p$groupe) && nzchar(p$groupe)) nom_colonne(d, p$groupe, "Colonne de groupes") else NULL
+  if (!is.null(gn) && !is.null(p$valeur) && nzchar(p$valeur)) {
+    v <- col_num(d, nom_colonne(d, p$valeur, "Colonne des valeurs")); g <- ch_cat(d[[gn]]); ok <- is.finite(v) & !is.na(g)
+    if (!any(ok)) stop("Aucune valeur exploitable.", call. = FALSE)
+    niv <- unique(g[ok]); s <- lapply(niv, function(l) v[ok & g == l]); names(s) <- niv
+    return(list(s = s, nom_val = p$valeur, nom_grp = gn))
+  }
+  cols <- noms_numeriques(d, unlist(p$colonnes))
+  s <- lapply(cols, function(nm) sans_na(d[[nm]])); names(s) <- cols
+  list(s = s, nom_val = if (length(cols) == 1) cols else "Valeur", nom_grp = NULL)
+}
+decrire <- function(s) data.frame(Serie = names(s), n = vapply(s, length, integer(1)), Moyenne = vapply(s, function(v) if (length(v)) mean(v) else NA_real_, numeric(1)),
+                                  Ecart_type = vapply(s, function(v) if (length(v) > 1) stats::sd(v) else NA_real_, numeric(1)),
+                                  Minimum = vapply(s, function(v) if (length(v)) min(v) else NA_real_, numeric(1)),
+                                  Mediane = vapply(s, function(v) if (length(v)) stats::median(v) else NA_real_, numeric(1)),
+                                  Maximum = vapply(s, function(v) if (length(v)) max(v) else NA_real_, numeric(1)), stringsAsFactors = FALSE, row.names = NULL)
+# Résumé par catégorie (effectif, somme ou moyenne), le surplus de catégories étant regroupé en « Autres ».
+resume_categories <- function(d, p, max_cat = 12) {
+  cn <- nom_colonne(d, p$categorie, "Colonne des catégories"); g <- ch_cat(d[[cn]])
+  fct <- if (isTRUE(p$fonction %in% c("somme", "moyenne"))) p$fonction else "effectif"
+  if (fct == "effectif" || is.null(p$valeur) || !nzchar(p$valeur)) { fct <- "effectif"; v <- rep(1, length(g)); vn <- NULL }
+  else { vn <- nom_colonne(d, p$valeur, "Colonne des valeurs"); v <- col_num(d, vn) }
+  ok <- !is.na(g) & is.finite(v)
+  if (!any(ok)) stop("Aucune donnée exploitable.", call. = FALSE)
+  val <- tapply(v[ok], g[ok], if (fct == "moyenne") mean else sum)
+  val <- sort(val, decreasing = TRUE)
+  if (length(val) > max_cat) { reste <- sum(val[-seq_len(max_cat - 1)]); val <- c(val[seq_len(max_cat - 1)], Autres = reste) }
+  list(val = val, nom = cn, lib = if (fct == "effectif") "Effectif" else sprintf("%s de %s", if (fct == "somme") "Somme" else "Moyenne", vn), fct = fct)
+}
+
+cmd_graphique <- function(d, p) {
+  type <- p$type_graphique
+  figs <- character(0); lignes <- character(0); tabs <- list(); avert <- list(); titre <- "Graphique"
+  if (type == "histogramme") {
+    S <- series_graphique(d, p); s <- S$s; titre <- "Histogramme"
+    cl <- suppressWarnings(as.integer(num(p$classes)))
+    for (j in seq_along(s)[seq_len(min(length(s), 12))]) {
+      x <- s[[j]]; if (length(x) < 2) { avert <- c(avert, list(sprintf("« %s » : au moins 2 valeurs sont nécessaires.", names(s)[j]))); next }
+      f <- lire_png(sprintf("histogramme_%d.png", j), largeur = 800, hauteur = 560); par(mar = c(4.5, 4.5, 3, 1))
+      h <- hist(x, breaks = if (!is.na(cl) && cl >= 2) cl else "FD", plot = FALSE)
+      ymax <- max(h$counts) * 1.12
+      if (vrai(p$normale) && stats::sd(x) > 0) { larg <- diff(h$breaks)[1]; ymax <- max(max(h$counts), stats::dnorm(mean(x), mean(x), stats::sd(x)) * length(x) * larg) * 1.15 }
+      plot(h, col = "#cfe0f5", border = "white", main = sprintf("Histogramme — %s", names(s)[j]), xlab = names(s)[j], ylab = "Effectif", ylim = c(0, ymax))
+      if (vrai(p$normale) && stats::sd(x) > 0) { xs <- seq(min(h$breaks), max(h$breaks), length.out = 300); lines(xs, stats::dnorm(xs, mean(x), stats::sd(x)) * length(x) * diff(h$breaks)[1], col = "#b03030", lwd = 2) }
+      invisible(dev.off()); figs <- c(figs, f)
+    }
+    tabs$Series <- decrire(s); lignes <- c(sprintf("Histogramme de %d série(s).", length(s)), sprintf("Classes : %s.", if (!is.na(cl) && cl >= 2) paste(cl, "demandées") else "choisies automatiquement (règle de Freedman-Diaconis)"))
+  } else if (type %in% c("secteurs", "barres")) {
+    R <- resume_categories(d, p, if (type == "secteurs") 10 else 30); val <- R$val; tot <- sum(val)
+    if (type == "secteurs" && any(val < 0)) stop("Un graphique en secteurs exige des valeurs positives.", call. = FALSE)
+    titre <- if (type == "secteurs") "Graphique en secteurs" else "Diagramme en barres"
+    gn <- if (type == "barres" && !is.null(p$groupe) && nzchar(p$groupe)) nom_colonne(d, p$groupe, "Colonne de groupes") else NULL
+    f <- lire_png(if (type == "secteurs") "secteurs.png" else "barres.png", largeur = 800, hauteur = 560)
+    if (type == "secteurs") {
+      par(mar = c(1, 1, 3, 1)); pc <- 100 * val / tot
+      pie(val, labels = sprintf("%s\n%s %%", names(val), sub("\\.", ",", formatC(pc, format = "f", digits = 1))), col = PAL(length(val)), border = "white", main = sprintf("%s — %s", R$lib, R$nom), cex = 0.85)
+    } else if (is.null(gn)) {
+      par(mar = c(if (max(nchar(names(val))) > 8) 8 else 4.5, 4.5, 3, 1))
+      b <- barplot(val, col = "#cfe0f5", border = "#5b7fb0", las = if (max(nchar(names(val))) > 8 || length(val) > 8) 2 else 1, main = sprintf("%s par %s", R$lib, R$nom), ylab = R$lib, ylim = c(0, max(val, 0) * 1.12))
+      text(b, val, labels = fmt(val, 5), pos = 3, cex = 0.75)
+    } else {
+      cn <- nom_colonne(d, p$categorie); g1 <- ch_cat(d[[cn]]); g2 <- ch_cat(d[[gn]])
+      vv <- if (R$fct == "effectif") rep(1, nrow(d)) else col_num(d, p$valeur); ok <- !is.na(g1) & !is.na(g2) & is.finite(vv)
+      M <- tapply(vv[ok], list(g1[ok], g2[ok]), if (R$fct == "moyenne") mean else sum); M[is.na(M)] <- 0
+      M <- M[names(sort(rowSums(M), decreasing = TRUE))[seq_len(min(nrow(M), 12))], , drop = FALSE]
+      par(mar = c(if (max(nchar(rownames(M))) > 8) 8 else 4.5, 4.5, 3, 1))
+      barplot(t(M), beside = TRUE, col = PAL(ncol(M)), las = if (max(nchar(rownames(M))) > 8) 2 else 1, main = sprintf("%s par %s et %s", R$lib, R$nom, gn), ylab = R$lib, legend.text = colnames(M), args.legend = list(x = "topright", bty = "n", cex = 0.8))
+      tabs$Tableau <- data.frame(Categorie = rownames(M), as.data.frame(M, check.names = FALSE), stringsAsFactors = FALSE, check.names = FALSE)
+    }
+    invisible(dev.off()); figs <- c(figs, f)
+    if (is.null(tabs$Tableau)) tabs$Categories <- data.frame(Categorie = names(val), Valeur = as.numeric(val), Part_pct = 100 * as.numeric(val) / tot, stringsAsFactors = FALSE)
+    lignes <- c(sprintf("%s — %s : %d catégorie(s), total = %s.", titre, R$lib, length(val), fmt(tot, 8)))
+  } else if (type %in% c("bulles", "nuage")) {
+    xn <- nom_colonne(d, p$x, "Axe X"); yn <- nom_colonne(d, p$y, "Axe Y"); x <- col_num(d, xn); y <- col_num(d, yn)
+    couleur <- if (!is.null(p$couleur) && nzchar(p$couleur)) ch_cat(d[[nom_colonne(d, p$couleur, "Colonne de couleur")]]) else NULL
+    if (type == "bulles") { tn <- nom_colonne(d, p$taille, "Taille des bulles"); tz <- col_num(d, tn) } else tz <- rep(1, length(x))
+    ok <- is.finite(x) & is.finite(y) & is.finite(tz) & (if (type == "bulles") tz > 0 else TRUE) & (if (is.null(couleur)) TRUE else !is.na(couleur))
+    if (sum(ok) < 2) stop("Au moins 2 points complets sont nécessaires.", call. = FALSE)
+    x <- x[ok]; y <- y[ok]; tz <- tz[ok]; couleur <- if (is.null(couleur)) NULL else couleur[ok]
+    niv <- if (is.null(couleur)) NULL else unique(couleur); pal <- PAL(max(length(niv), 1))
+    col_pt <- if (is.null(couleur)) "#2a5d9f" else pal[match(couleur, niv)]
+    titre <- if (type == "bulles") "Graphique à bulles" else "Nuage de points"
+    f <- lire_png(if (type == "bulles") "bulles.png" else "nuage.png", largeur = 850, hauteur = 600); par(mar = c(4.5, 4.5, 3, 1))
+    plot(x, y, type = "n", xlab = xn, ylab = yn, main = sprintf("%s : %s selon %s", titre, yn, xn), xlim = range(x) + c(-1, 1) * diff(range(x)) * (if (type == "bulles") 0.12 else 0.03), ylim = range(y) + c(-1, 1) * diff(range(y)) * (if (type == "bulles") 0.12 else 0.03))
+    if (type == "bulles") symbols(x, y, circles = sqrt(tz / max(tz)), inches = 0.3, add = TRUE, bg = paste0(col_pt, "99"), fg = col_pt)
+    else points(x, y, pch = 19, cex = 0.9, col = paste0(col_pt, "CC"))
+    lignes <- c(sprintf("%s : %d points.", titre, length(x)))
+    if (type == "nuage" && vrai(p$ajust) && stats::sd(x) > 0) {
+      fit <- stats::lm(y ~ x); abline(fit, col = "#b03030", lwd = 2); ct <- stats::cor.test(x, y)
+      legend("topleft", bty = "n", cex = 0.85, text.col = "#b03030", legend = c(sprintf("Y = %s %s %s × X", fmt(coef(fit)[1], 4), if (coef(fit)[2] < 0) "−" else "+", fmt(abs(coef(fit)[2]), 4)), sprintf("r = %s ; R² = %s", fmt(ct$estimate, 4), pct_txt(ct$estimate^2))))
+      lignes <- c(lignes, "H0 : ρ = 0 (pas de corrélation linéaire) ; H1 : ρ ≠ 0.", regle(), sprintf("Droite ajustée : Y = %s %s %s × X ; r = %s ; p-value %s", fmt(coef(fit)[1], 5), if (coef(fit)[2] < 0) "−" else "+", fmt(abs(coef(fit)[2]), 5), fmt(ct$estimate, 4), fmt_p(ct$p.value)),
+                  decision(ct$p.value, "aucune corrélation linéaire mise en évidence.", "corrélation linéaire significative."))
+    }
+    if (!is.null(niv)) legend("topright", bty = "n", pch = 19, col = pal, legend = niv, cex = 0.8, title = p$couleur)
+    if (type == "bulles") lignes <- c(lignes, sprintf("Surface des bulles proportionnelle à « %s » (de %s à %s).", tn, fmt(min(tz)), fmt(max(tz))))
+    invisible(dev.off()); figs <- c(figs, f)
+  } else if (type %in% c("individuelles", "intervalles", "boite")) {
+    S <- series_graphique(d, p); s <- S$s; s <- s[vapply(s, length, integer(1)) > 0]
+    if (!length(s)) stop("Aucune valeur exploitable.", call. = FALSE)
+    titre <- c(individuelles = "Diagramme des valeurs individuelles", intervalles = "Graphique d'intervalles", boite = "Boîte à moustaches")[[type]]
+    f <- lire_png(c(individuelles = "valeurs_individuelles.png", intervalles = "intervalles.png", boite = "boite_moustaches.png")[[type]], largeur = 800, hauteur = 580)
+    long <- max(nchar(names(s))) > 8 || length(s) > 8; par(mar = c(if (long) 8 else 4.5, 4.5, 3, 1))
+    ylab <- S$nom_val
+    if (type == "boite") {
+      boxplot(s, col = "#cfe0f5", border = "#5b7fb0", las = if (long) 2 else 1, ylab = ylab, main = titre); points(seq_along(s), vapply(s, mean, numeric(1)), pch = 18, cex = 1.4, col = "#b03030")
+      legend("topright", bty = "n", pch = 18, col = "#b03030", legend = "moyenne", cex = 0.8)
+    } else if (type == "individuelles") {
+      stripchart(s, vertical = TRUE, method = "jitter", jitter = 0.18, pch = 19, cex = 0.8, col = "#2a5d9f99", las = if (long) 2 else 1, ylab = ylab, main = titre)
+      m <- vapply(s, mean, numeric(1)); segments(seq_along(s) - 0.3, m, seq_along(s) + 0.3, m, col = "#b03030", lwd = 3)
+      legend("topright", bty = "n", lwd = 3, col = "#b03030", legend = "moyenne", cex = 0.8)
+    } else {
+      m <- vapply(s, mean, numeric(1)); n <- vapply(s, length, integer(1)); sd_ <- vapply(s, function(v) if (length(v) > 1) stats::sd(v) else NA_real_, numeric(1))
+      h <- ifelse(n > 1, stats::qt(1 - ALPHA / 2, pmax(n - 1, 1)) * sd_ / sqrt(n), NA_real_)
+      yl <- range(c(m - h, m + h), na.rm = TRUE); if (!all(is.finite(yl))) yl <- range(m); mg <- diff(yl) * 0.15 + 1e-9
+      plot(seq_along(s), m, ylim = yl + c(-mg, mg), xlim = c(0.5, length(s) + 0.5), pch = 19, cex = 1.3, col = "#2a5d9f", xaxt = "n", xlab = "", ylab = ylab, main = sprintf("Intervalles de confiance à %s des moyennes", conf_txt()), cex.main = 1.05)
+      axis(1, at = seq_along(s), labels = names(s), las = if (long) 2 else 1)
+      arrows(seq_along(s), m - h, seq_along(s), m + h, angle = 90, code = 3, length = 0.08, lwd = 2, col = "#2a5d9f")
+      tabs$Intervalles <- data.frame(Serie = names(s), n = n, Moyenne = m, Ecart_type = sd_, Borne_inf = m - h, Borne_sup = m + h, stringsAsFactors = FALSE)
+    }
+    invisible(dev.off()); figs <- c(figs, f)
+    tabs$Series <- decrire(s)
+    lignes <- c(sprintf("%s : %d série(s) ou groupe(s).", titre, length(s)))
+    if (type == "intervalles") lignes <- c(lignes, sprintf("Intervalle de confiance à %s de chaque moyenne (loi t de Student) ; des intervalles qui ne se chevauchent pas suggèrent une différence de moyennes (à confirmer par un test ou une ANOVA).", conf_txt()))
+  } else if (type == "probabilite") {
+    S <- series_graphique(d, p); s <- S$s; id <- if (isTRUE(p$loi %in% names(LOIS_ID))) p$loi else "normale"; L <- LOIS_ID[[id]]; titre <- sprintf("Diagramme de probabilité — %s", L$lib)
+    U <- function(pp, q) switch(id, normale = stats::qnorm(pp), lognormale = stats::qnorm(pp), exponentielle = -log(1 - pp), weibull = log(-log(1 - pp)),
+                                logistique = stats::qlogis(pp), gumbel = -log(-log(pp)), gamma = stats::qgamma(pp, shape = q[1]))
+    lg <- id %in% c("lognormale", "weibull")
+    lignes <- c(sprintf("%s. H0 : les données suivent la loi « %s » ; H1 : elles ne la suivent pas. Test d'Anderson-Darling, p-value par simulation.", titre, L$lib), regle())
+    for (j in seq_along(s)[seq_len(min(length(s), 12))]) {
+      x <- s[[j]]; nm <- names(s)[j]
+      if (length(x) < 8) { avert <- c(avert, list(sprintf("« %s » : au moins 8 valeurs sont nécessaires.", nm))); next }
+      r <- ajuster_loi(id, x, 300L, 20240601 + length(x) + j)
+      if (!r$ok) { avert <- c(avert, list(sprintf("« %s » : %s.", nm, r$raison))); next }
+      xs <- sort(x); pp <- (seq_along(xs) - 0.3) / (length(xs) + 0.4)
+      f <- lire_png(sprintf("probabilite_%d.png", j), largeur = 800, hauteur = 580); par(mar = c(4.5, 4.5, 3, 1))
+      yy <- U(pp, r$q); g <- seq(min(xs), max(xs), length.out = 200); if (lg) g <- exp(seq(log(min(xs)), log(max(xs)), length.out = 200))
+      yref <- U(pmin(pmax(L$cdf(g, r$q), 1e-9), 1 - 1e-9), r$q)
+      tick_p <- c(0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99)
+      plot(xs, yy, pch = 19, col = "#2a5d9f", cex = 0.9, yaxt = "n", log = if (lg) "x" else "", xlab = nm, ylab = "Pourcentage cumulé", main = sprintf("%s — %s", titre, nm))
+      axis(2, at = U(tick_p, r$q), labels = c("1", "5", "10", "25", "50", "75", "90", "95", "99"), las = 1)
+      abline(h = U(tick_p, r$q), col = "#eeeeee"); lines(g, yref, col = "#b03030", lwd = 2); points(xs, yy, pch = 19, col = "#2a5d9f", cex = 0.9)
+      legend("bottomright", bty = "n", cex = 0.85, legend = c(sprintf("AD = %s", fmt(r$A2, 4)), sprintf("p-value = %s", fmt_p(r$p)), fmt_par(r)))
+      invisible(dev.off()); figs <- c(figs, f)
+      lignes <- c(lignes, sprintf("%s (n = %d) : AD = %s ; p-value %s ; %s. %s", nm, length(x), fmt(r$A2, 4), fmt_p(r$p), fmt_par(r),
+                                  decision(r$p, sprintf("la loi « %s » n'est pas rejetée.", L$lib), sprintf("les données ne suivent pas la loi « %s ».", L$lib))))
+    }
+    if (!length(figs)) stop(paste(unlist(avert), collapse = " "), call. = FALSE)
+  } else stop("Type de graphique inconnu.", call. = FALSE)
+  list(titre = titre, lignes = lignes, conclusion = lignes[1], tables = tabs, figures = figs, avertissements = avert)
 }

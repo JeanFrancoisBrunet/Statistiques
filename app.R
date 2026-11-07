@@ -283,7 +283,7 @@ ui <- fluidPage(
             tags$li("Capabilité : Cp/Cpk et Cm/Cmk ne sont interprétables que si la méthode de calcul de la variation intra est appropriée et le procédé suffisamment stable. Pp/Ppk utilisent la dispersion globale."),
             tags$li("Kappa : la valeur dépend notamment de la prévalence des catégories ; examiner aussi la matrice de confusion et l'accord observé. Interprétation : Landis et Koch (1977) ; systèmes de mesure (AIAG, MSA) : Kappa > 0,75 bon à excellent, Kappa < 0,40 insuffisant.")
           ),
-          div(class = "stat-note", "Cette première version est un outil d'aide à l'analyse, pas une validation métrologique ou qualité automatique. Vérifiez les données, les hypothèses et les unités avant toute décision.")
+          div(class = "stat-note", "Cette version est un outil d'aide à l'analyse, pas une validation métrologique ou qualité automatique. Vérifiez les données, les hypothèses et les unités avant toute décision.")
         )
       )
     )

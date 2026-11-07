@@ -5,8 +5,7 @@ Redimensionne des images en icônes carrées PNG à fond transparent.
 Étapes pour chaque image :
   1. le fond uniforme (couleur des coins) est rendu transparent ;
   2. l'image est rognée au plus près du motif visible ;
-  3. le motif est ajusté dans un carré, centré, sans déformation,
-     avec une marge réglable.
+  3. le motif est ajusté dans un carré, centré, sans déformation, avec une marge réglable.
 
 Les originaux ne sont jamais modifiés.
 
