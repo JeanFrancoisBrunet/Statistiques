@@ -872,7 +872,7 @@ cmd_generer <- function(d, p) {
   discrete <- loi %in% c("poisson", "binomiale", "geometrique", "hypergeometrique")
   x <- switch(loi,
     normale = stats::rnorm(n, par("moyenne", "La moyenne"), par("ecart_type", "L'écart-type", 0, TRUE)),
-    uniforme = { a <- par("min", "Le minimum"); b <- par("max", "Le maximum"); if (a >= b) stop("Le minimum doit être inférieur au maximum.", call. = FALSE); stats::runif(n, a, b) },
+    uniforme =, aleatoire = { a <- par("min", "Le minimum"); b <- par("max", "Le maximum"); if (a >= b) stop("Le minimum doit être inférieur au maximum.", call. = FALSE); stats::runif(n, a, b) },
     poisson = stats::rpois(n, par("lambda", "La moyenne λ", 0, TRUE)),
     student = stats::rt(n, par("df", "Le nombre de degrés de liberté", 0, TRUE)),
     fisher = stats::rf(n, par("df1", "Le ddl du numérateur", 0, TRUE), par("df2", "Le ddl du dénominateur", 0, TRUE)),

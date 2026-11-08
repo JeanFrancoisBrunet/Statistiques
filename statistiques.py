@@ -87,6 +87,8 @@ RE_DATE_JMA = re.compile(r"^(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{2}|\d{4})(?:[ T]+(
 RE_DATE_STOCKEE = re.compile(r"^\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2}(?::\d{2})?)?$")
 # Lois de génération : (libellé, code R, [(clé, libellé du paramètre, valeur proposée)], description)
 LOIS_GENERATION = [
+    ("Aléatoire (random)", "aleatoire", [("min", "Minimum", "0"), ("max", "Maximum", "100")],
+     "Nombres tirés au hasard entre deux bornes, sans loi particulière : toutes les valeurs sont équiprobables (mettre 0 décimale pour obtenir des entiers)."),
     ("Normale (Gauss)", "normale", [("moyenne", "Moyenne", "0"), ("ecart_type", "Écart-type", "1")],
      "Distribution la plus importante en statistique : décrit des phénomènes naturels dont les valeurs se concentrent autour d'une moyenne, avec une symétrie parfaite."),
     ("Uniforme", "uniforme", [("min", "Minimum", "0"), ("max", "Maximum", "1")],
@@ -1048,7 +1050,7 @@ Données :
 • Une saisie sans ligne de noms est possible si toutes les valeurs de la première ligne sont numériques.
 • Pour un Kappa avec référence : soit une ligne par échantillon, une colonne de référence (reconnue automatiquement si son nom évoque une référence ou une norme)
   et une colonne par évaluateur ou par essai ; soit une ligne par évaluation (colonnes réponse, évaluateur, échantillon, essai, référence : format long, reconnu à ses noms de colonnes).
-• « Générer des données… » crée une variable aléatoire suivant une loi au choix (normale, uniforme, Poisson, Student, Fisher, khi², binomiale, géométrique, hypergéométrique, exponentielle, gamma, logistique, Weibull, log-normale, bêta), avec les paramètres de la loi,
+• « Générer des données… » crée une variable aléatoire : tirage « aléatoire (random) » entre deux bornes, sans loi particulière, ou loi au choix (normale, uniforme, Poisson, Student, Fisher, khi², binomiale, géométrique, hypergéométrique, exponentielle, gamma, logistique, Weibull, log-normale, bêta), avec les paramètres de la loi,
   le nombre de valeurs, le nom de la variable, le nombre de décimales et, si on le souhaite, une valeur d'initialisation pour retrouver exactement le même tirage. La variable s'ajoute aux données chargées, ou les remplace si on le demande.
 
 Organisation : les onglets sont regroupés (Description, Tests, Modélisation, Qualité, Graphiques) ; l'onglet Illustrations affiche les images de référence (PNG) du dossier « illustrations », et le bouton « Illustration… » de chaque analyse ouvre le sujet associé.
@@ -1176,7 +1178,8 @@ class PanneauGraphiques:
         self.lbl = ttk.Label(barre, text="", width=16, anchor="center")
         self.lbl.pack(side="left")
         ttk.Button(barre, text="▶", width=3, command=lambda: self.aller(1)).pack(side="left")
-        ttk.Button(barre, text=f"Enregistrer {objet.lower()}…", command=self.enregistrer).pack(side="left", padx=10)
+        ttk.Button(barre, text=f"Copier {objet.lower()}", command=self.copier).pack(side="left", padx=(10, 0))
+        ttk.Button(barre, text=f"Enregistrer {objet.lower()}…", command=self.enregistrer).pack(side="left", padx=6)
         if plein_ecran:
             ttk.Button(barre, text="Plein écran", command=plein_ecran).pack(side="left")
         if fermer:
@@ -1222,14 +1225,47 @@ class PanneauGraphiques:
             self.afficher()
 
     def enregistrer(self):
-        from tkinter import filedialog
+        """Enregistre une copie du PNG affiché dans le dossier choisi."""
+        from tkinter import messagebox
         if not self.figures:
+            messagebox.showinfo(TITRE, "Rien à enregistrer : aucune image n'est affichée.")
             return
-        src = self.figures[self.i]
-        chemin = choisir_fichier_ecriture(self.win, title="Enregistrer le graphique", defaultextension=".png", initialfile=src.name,
-                                              filetypes=[("Image PNG", "*.png")], initialdir=str(Path.home()))
-        if chemin:
+        src = Path(self.figures[self.i])
+        parent = self.frame.winfo_toplevel()
+        chemin = choisir_fichier_ecriture(parent, title=f"Enregistrer {self.objet.lower()}", defaultextension=".png", initialfile=src.name,
+                                          filetypes=[("Image PNG", "*.png")], initialdir=str(Path.home()))
+        if not chemin:
+            return
+        try:
             shutil.copy(src, chemin)
+        except OSError as e:
+            messagebox.showerror(TITRE, f"Enregistrement impossible : {e}", parent=parent)
+            return
+        messagebox.showinfo(TITRE, f"Image enregistrée :\n{chemin}", parent=parent)
+
+    def copier(self):
+        """Place l'image affichée dans le presse-papiers (pour la coller dans LibreOffice Writer, etc.)."""
+        from tkinter import messagebox
+        parent = self.frame.winfo_toplevel()
+        if not self.figures:
+            messagebox.showinfo(TITRE, "Rien à copier : aucune image n'est affichée.")
+            return
+        src = str(self.figures[self.i])
+        for cmd in (["wl-copy", "--type", "image/png"], ["xclip", "-selection", "clipboard", "-t", "image/png"]):
+            if shutil.which(cmd[0]):
+                try:
+                    if cmd[0] == "wl-copy":
+                        with open(src, "rb") as f:
+                            subprocess.run(cmd, stdin=f, check=True, timeout=10)
+                    else:
+                        subprocess.Popen(cmd + ["-i", src], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)   # xclip reste actif pour servir le presse-papiers
+                    messagebox.showinfo(TITRE, "Image copiée\n\nColler avec Ctrl+V", parent=parent)
+                    return
+                except Exception as e:
+                    messagebox.showerror(TITRE, f"Copie impossible : {e}", parent=parent)
+                    return
+        messagebox.showinfo(TITRE, "La copie dans le presse-papiers demande l'outil « xclip » (ou « wl-clipboard » sous Wayland) :\n"
+                                   "sudo apt install -y xclip\n\nEn attendant, « Enregistrer… » crée un fichier PNG à insérer (Insertion > Image dans Writer).", parent=parent)
 
 
 class Visionneuse:
@@ -1324,6 +1360,11 @@ class DialogueGeneration:
                 self.lbl_params[k].grid_remove()
                 self.ent_params[k].grid_remove()
         self.lbl_desc.configure(text=desc)
+        code = self._loi()[1]
+        if code == "aleatoire":
+            self.v_dec.set("0")
+        elif self.v_dec.get() == "0":
+            self.v_dec.set("3")
         self.win.update_idletasks()
 
     @staticmethod
@@ -1340,7 +1381,7 @@ class DialogueGeneration:
             val = {cle: self._nombre(self.v_params[k].get(), f"« {lib} »") for k, (cle, lib, _) in enumerate(params)}
             if code == "normale":
                 valeurs = generer_normale(self.v_n.get(), val["moyenne"], val["ecart_type"], self.v_dec.get(), self.v_graine.get())
-            elif code == "uniforme":
+            elif code in ("uniforme", "aleatoire"):
                 valeurs = generer_uniforme(self.v_n.get(), val["min"], val["max"], self.v_dec.get(), self.v_graine.get())
             else:
                 self.win.configure(cursor="watch")
