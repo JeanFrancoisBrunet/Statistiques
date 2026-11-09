@@ -239,11 +239,18 @@ DECL <- list(
     fc("modeles", "Modèles de tendance", "liste", opts = c("Linéaire" = "lineaire", "Quadratique" = "quadratique", "Exponentielle" = "exponentielle", "Logistique (courbe en S)" = "logistique")),
     fc("horizon", "Périodes à prévoir", "num", defaut = 0)),
     aide = "Avec « Analyser par groupe », la tendance est ajustée groupe par groupe."),
-  attr = list(titre = "Cartes p et u", commande = "carte_attributs", fixes = list(tests = list(1, 2, 3, 4)), champs = list(
-    fc("type", "Type de carte", "choix", opts = c("Carte p — proportion d'unités défectueuses" = "p", "Carte u — défauts par unité" = "u")),
+  anova2 = list(titre = "ANOVA 2 facteurs", commande = "anova2", champs = list(
+    fc("valeur", "Réponse (mesures)", "col"),
+    fc("facteur_a", "Facteur A", "col", cols = "all"),
+    fc("facteur_b", "Facteur B", "col", cols = "all"),
+    fc("interaction", "Interaction A × B", "case", defaut = TRUE)),
+    aide = "Une ligne par mesure, avec une colonne pour chaque facteur. Sommes des carrés ajustées (type III) ; comparaisons de Tukey des facteurs significatifs si le plan est équilibré."),
+  attr = list(titre = "Cartes d'attributs", commande = "carte_attributs", fixes = list(tests = list(1, 2, 3, 4)), champs = list(
+    fc("type", "Type de carte", "choix", opts = c("Carte p — proportion d'unités défectueuses" = "p", "Carte np — nombre d'unités défectueuses" = "np",
+                                                   "Carte c — nombre de défauts par unité de contrôle" = "c", "Carte u — défauts par unité" = "u")),
     fc("defauts", "Colonne des comptages", "col"),
-    fc("effectif", "Colonne des effectifs (facultatif)", "col", option = TRUE),
-    fc("n", "Effectif constant (si pas de colonne d'effectifs)", "num", option = TRUE),
+    fc("effectif", "Colonne des effectifs (facultatif)", "col", option = TRUE, si = "v$type != 'c'"),
+    fc("n", "Effectif constant (si pas de colonne d'effectifs)", "num", option = TRUE, si = "v$type != 'c'"),
     fc("ordre", "Ordre des données (facultatif)", "col", cols = "all", option = TRUE),
     fc("phase", "Phases avant / après (colonne, facultatif)", "col", cols = "all", option = TRUE),
     fc("rupture", "ou « Après » à partir du point n°", "num", option = TRUE)),
@@ -287,6 +294,27 @@ decl_tab <- function(pref) {
            actionButton(paste0("run_", pref), "Lancer", class = "btn-primary"),
            uiOutput(paste0(pref, "_out")))
 }
+
+# Vocabulaire : fichier « vocabulaire.txt » (« Terme : définition » ; les lignes qui commencent par une espace prolongent la définition ; # = commentaire),
+# partagé avec l'application de bureau et le bot Telegram.
+lire_vocabulaire <- function(chemin = "vocabulaire.txt") {
+  if (!file.exists(chemin)) return(data.frame(Terme = character(0), Definition = character(0), stringsAsFactors = FALSE))
+  lg <- sub("^\ufeff", "", readLines(chemin, encoding = "UTF-8", warn = FALSE)); lg <- gsub("\u00a0", " ", lg)
+  termes <- character(0); defs <- character(0)
+  for (l in lg) {
+    if (!nzchar(trimws(l))) next
+    if (grepl("^\\s", l)) { if (length(defs)) defs[length(defs)] <- paste(defs[length(defs)], trimws(l), sep = "\n"); next }
+    if (grepl("^\\s*#", l)) next
+    m <- regmatches(l, regexec("^(.*?)\\s:(?:\\s+(.*))?$", l, perl = TRUE))[[1]]
+    if (length(m) >= 2) { termes <- c(termes, trimws(m[2])); defs <- c(defs, if (length(m) >= 3) trimws(m[3]) else "") }
+  }
+  d <- data.frame(Terme = termes, Definition = trimws(defs), stringsAsFactors = FALSE)
+  d[order(tolower(iconv(d$Terme, "UTF-8", "ASCII//TRANSLIT"))), , drop = FALSE]
+}
+tab_vocabulaire <- tabPanel("Vocabulaire", br(),
+  helpText("Glossaire lu dans le fichier « vocabulaire.txt » du dossier du programme (« Terme : définition », une entrée par ligne) ; il se complète à la main, puis « Recharger »."),
+  actionButton("vocab_reload", "Recharger"), br(), br(),
+  DT::dataTableOutput("vocab_table"))
 
 tab_illustrations <- tabPanel("Illustrations", br(),
   helpText("Images de référence (PNG) du dossier « illustrations » : <sujet>.png, <sujet>_1.png, <sujet>_2.png…"),
@@ -407,6 +435,7 @@ ui <- fluidPage(
             actionButton("run_anova", "Lancer l'ANOVA", class = "btn-primary"),
             uiOutput("anova_out")
           ),
+          decl_tab("anova2"),
           tabPanel("Khi²", br(),
             selectInput("x_test", "Test", choices = c("Indépendance de deux variables" = "independance",
               "Homogénéité de plusieurs populations" = "homogeneite", "Conformité à une répartition ou à une loi" = "conformite")),
@@ -477,14 +506,15 @@ ui <- fluidPage(
           decl_tab("attr"),
           tabPanel("R&R", br(),
             radioButtons("rr_mode", "Étude", choices = c("R&R croisée : pièces × opérateurs × répétitions (une ligne par mesure)" = "croisee",
+              "R&R emboîtée : chaque pièce n'est mesurée que par un seul opérateur (essai destructif)" = "emboitee",
               "R&R de type 1 : une seule pièce étalon mesurée de nombreuses fois" = "type1")),
-            conditionalPanel("input.rr_mode == 'croisee'",
+            conditionalPanel("input.rr_mode == 'croisee' || input.rr_mode == 'emboitee'",
               selectInput("rc_p", "Pièces", choices = NULL),
               selectInput("rc_o", "Opérateurs", choices = NULL),
               selectInput("rc_m", "Mesures", choices = NULL),
               numericInput("rc_tol", "Tolérance (facultative)", value = NA_real_, min = 0),
               numericInput("rc_l", "L (écarts-types de la variation d'étude)", value = 6, min = 1),
-              numericInput("rc_a", "Seuil de l'interaction", value = 0.05, min = 0, max = 1, step = 0.01)),
+              conditionalPanel("input.rr_mode == 'croisee'", numericInput("rc_a", "Seuil de l'interaction", value = 0.05, min = 0, max = 1, step = 0.01))),
             conditionalPanel("input.rr_mode == 'type1'",
               selectInput("r1_col", "Mesures", choices = NULL),
               numericInput("r1_ref", "Valeur de référence", value = NA_real_),
@@ -505,15 +535,16 @@ ui <- fluidPage(
         ),
         decl_tab("graph"),
         tab_illustrations,
+        tab_vocabulaire,
         tabPanel("Aide & limites", br(),
           h4("Interprétation responsable"),
           tags$ul(
             tags$li("Groupes : « Analyser par groupe » (colonne de gauche) lance chaque analyse une fois par groupe retenu, avec les résultats et les graphiques de chaque groupe. Les colonnes de dates (JJ/MM/AAAA ou AAAA-MM-JJ, avec ou sans heure) sont reconnues au chargement ; regroupées par jour, mois ou année quand elles servent de groupes."),
             tags$li("Décision : le risque α (0,05 par défaut) se règle dans la colonne de gauche. H0 est rejetée si la p-value est inférieure à α, et conservée si elle lui est supérieure ou égale. Pour un test de normalité (quel que soit le test), la normalité n'est validée que si la p-value est supérieure ou égale à α."),
-            tags$li("Organisation : les onglets sont regroupés (Description, Tests, Modélisation, Qualité) ; « Générer des données aléatoires » (onglet Données) propose 15 lois et le tirage aléatoire entre deux bornes ; l'onglet Illustrations affiche les images PNG du dossier « illustrations »."),
+            tags$li("Organisation : les onglets sont regroupés (Description, Tests, Modélisation, Qualité) ; « Générer des données aléatoires » (onglet Données) propose 15 lois et le tirage aléatoire entre deux bornes ; l'onglet Illustrations affiche les images PNG du dossier « illustrations » ; l'onglet Vocabulaire affiche le glossaire du fichier « vocabulaire.txt »."),
             tags$li("Test Z : écart(s)-type(s) de population connu(s), un ou deux échantillons. Test de Poisson : un échantillon (taux de référence) ou deux échantillons (rapport des taux), tests exacts. Estimation : intervalle de confiance d'une moyenne (loi normale si σ est connu, t de Student sinon), bilatéral ou unilatéral, et taille d'échantillon pour une marge d'erreur donnée."),
             tags$li("Identification de loi : normale, log-normale, exponentielle, gamma, Weibull, logistique, valeur extrême ; H0 : les données suivent la loi testée (conservée si p-value ≥ α). Corrélation (Pearson, Spearman, Kendall), régression (linéaire, multiple, polynôme de degré 2 ou 3) et séries chronologiques (tendances linéaire, quadratique, exponentielle, logistique)."),
-            tags$li("Cartes de contrôle : phases avant / après (colonne de phases ou numéro de point), limites calculées séparément dans chaque phase ; cartes p et u pour les attributs. Graphiques : histogramme, secteurs, barres, bulles, nuage de points, valeurs individuelles, intervalles, boîtes à moustaches, diagramme de probabilité."),
+            tags$li("Cartes de contrôle : phases avant / après (colonne de phases ou numéro de point), limites calculées séparément dans chaque phase ; cartes p, np, c et u pour les attributs. Graphiques : histogramme, secteurs, barres, bulles, nuage de points, valeurs individuelles, intervalles, boîtes à moustaches, diagramme de probabilité."),
             tags$li("p-value : elle ne mesure ni l'importance pratique de l'effet ni la probabilité que l'hypothèse soit vraie."),
             tags$li("Shapiro-Wilk : avec de grands effectifs, de petits écarts à la normalité sans importance pratique peuvent devenir significatifs ; examiner aussi les graphiques."),
             tags$li("Test t : vérifier l'indépendance, la forme des données et les conditions du test choisi. Le test de Welch est le choix par défaut pour deux échantillons indépendants."),
@@ -765,6 +796,9 @@ server <- function(input, output, session) {
     if (identical(input$rr_mode, "type1")) {
       lancer("rr", "rr1", list(colonne = input$r1_col, reference = vide(input$r1_ref), tolerance = vide(input$r1_tol),
                                k = vide(input$r1_k), l = vide(input$r1_l)))
+    } else if (identical(input$rr_mode, "emboitee")) {
+      lancer("rr", "rr_emboitee", list(piece = input$rc_p, operateur = input$rc_o, mesure = input$rc_m,
+                                       tolerance = vide(input$rc_tol), l = vide(input$rc_l)))
     } else {
       lancer("rr", "rr_croisee", list(piece = input$rc_p, operateur = input$rc_o, mesure = input$rc_m,
                                       tolerance = vide(input$rc_tol), l = vide(input$rc_l), alpha = vide(input$rc_a)))
@@ -853,6 +887,15 @@ server <- function(input, output, session) {
       updateTextInput(session, "g_nom", value = paste0("Serie_", ncol(d) + 1))
       showNotification(sprintf("%d valeur(s) générée(s) : variable « %s ».", length(unlist(r$valeurs)), nom), type = "message")
     }, error = function(e) showNotification(conditionMessage(e), type = "error", duration = 8))
+  })
+
+  # ---- Vocabulaire ----
+  output$vocab_table <- DT::renderDataTable({
+    input$vocab_reload
+    DT::datatable(lire_vocabulaire(), rownames = FALSE, colnames = c("Terme", "Définition"), escape = TRUE,
+                  options = list(pageLength = 15, lengthMenu = c(10, 15, 30, 100), language = list(search = "Rechercher :", lengthMenu = "_MENU_ termes",
+                                 info = "_START_ à _END_ sur _TOTAL_ termes", zeroRecords = "Aucun terme ne correspond.", paginate = list(previous = "Précédent", `next` = "Suivant")),
+                                 columnDefs = list(list(width = "25%", targets = 0))))
   })
 
   # ---- Illustrations ----

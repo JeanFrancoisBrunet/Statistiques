@@ -10,7 +10,7 @@
 #
 #  Commandes (champ "commande" de params.json) :
 #    descriptif, normalite, t, anova, capabilite, kappa
-#    et, dans commandes_avancees.R : ftest, khi2, carte, rr1, rr_croisee
+#    et, dans commandes_avancees.R : ftest, khi2, carte, rr1, rr_croisee, rr_emboitee
 #  Dépendance R : jsonlite  (sudo apt install r-cran-jsonlite)
 #  Auteur : Jean-François BRUNET – JFBConseils – Octobre 2026
 # =============================================================================
@@ -284,8 +284,13 @@ cmd_normalite <- function(d, p) {
     hist(x, freq = FALSE, main = paste("Distribution :", nom), xlab = "Mesure", ylab = "Densité", col = "#cfe0f5", border = "white",
          breaks = h$breaks, ylim = c(0, yh * 1.1))
     if (sx > 0) curve(dnorm(x, mean(x), sx), add = TRUE, lwd = 2, col = "#b03030")
-    qqnorm(x, main = paste("Droite de Henry :", nom), xlab = "Quantiles théoriques", ylab = "Quantiles observés", pch = 19, col = "#2a5d9f")
-    qqline(x, col = "#b03030", lwd = 2)
+    mx <- mean(x); sx2 <- stats::sd(x); zr <- range(stats::qnorm(stats::ppoints(n))); zz <- seq(zr[1] - 0.2, zr[2] + 0.2, length.out = 100)
+    ec <- stats::qnorm(1 - ALPHA / 2) * sx2 * sqrt((1 + zz^2 / 2) / n)          # limites de confiance ponctuelles de la droite (comme Minitab)
+    qqnorm(x, main = paste("Droite de Henry :", nom), xlab = "Quantiles théoriques", ylab = "Quantiles observés", pch = 19, col = "#2a5d9f",
+           ylim = range(x, mx + sx2 * zz - ec, mx + sx2 * zz + ec))
+    lines(zz, mx + sx2 * zz, col = "#b03030", lwd = 2)
+    lines(zz, mx + sx2 * zz - ec, col = "#b03030", lty = 2); lines(zz, mx + sx2 * zz + ec, col = "#b03030", lty = 2)
+    legend("topleft", bty = "n", cex = 0.8, lty = c(1, 2), col = "#b03030", legend = c("Droite ajustée", sprintf("Limites de confiance à %s", conf_txt())))
     invisible(dev.off())
     figs <- c(figs, fig)
   }
@@ -653,7 +658,7 @@ lancer_commande <- function(d, p) {
          anova = cmd_anova(d, p), capabilite = cmd_capabilite(d, p), kappa = cmd_kappa(d, p),
          ftest = avancee("cmd_ftest", d, p), khi2 = avancee("cmd_khi2", d, p),
          carte = avancee("cmd_carte", d, p), rr1 = avancee("cmd_rr1", d, p),
-         rr_croisee = avancee("cmd_rr_croisee", d, p), generer = avancee("cmd_generer", d, p),
+         rr_croisee = avancee("cmd_rr_croisee", d, p), rr_emboitee = avancee("cmd_rr_emboitee", d, p), anova2 = avancee("cmd_anova2", d, p), generer = avancee("cmd_generer", d, p),
          z = avancee("cmd_z", d, p), poisson = avancee("cmd_poisson", d, p), estimation = avancee("cmd_estimation", d, p),
          identification = avancee("cmd_identification", d, p), correlation = avancee("cmd_correlation", d, p),
          regression = avancee("cmd_regression", d, p), carte_attributs = avancee("cmd_carte_attributs", d, p), graphique = avancee("cmd_graphique", d, p), serie = avancee("cmd_serie", d, p),

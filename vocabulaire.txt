@@ -1,0 +1,124 @@
+# Vocabulaire du programme Statistiques — un terme par entrée, au format « Terme : définition ».
+# Pour compléter la liste : ajouter une ligne (ou utiliser le bouton « Ajouter… » de l'onglet Vocabulaire), puis « Recharger » dans le programme.
+# Une définition peut continuer sur les lignes suivantes, si elles commencent par deux espaces.
+# Les lignes qui commencent par # sont ignorées. Ce fichier est lu par l'application de bureau, l'interface web et le bot Telegram.
+
+Aléarisation : Fait de réaliser les essais d’un plan d’expérience dans un ordre aléatoire.
+  La répartition aléatoire évite que l’effet d’une variable masquée soit attribué à tort à un autre facteur ou cache les effets réels des facteurs testés.
+Attribut : voir données discrètes « attributs ».
+Capabilité : Aptitude d’un processus à fournir des produits (ou service) conformément aux attentes des clients. Indices (court terme : Cpk, long terme : Ppk) obtenus en calculant le rapport entre la tolérance (ce que souhaite le client) et la dispersion du processus (6 écart-types : ce que le processus actuel est réellement capable de fournir).
+Carte C : carte de contrôle qui présente le nombre de défauts par échantillon
+Carte de contrôle : Représentation graphique des performances d’une caractéristique dans le temps, relativement à ses limites naturelles (limites de contrôle) et à sa tendance centrale (moyenne).
+Carte P : carte de contrôle utilisée pour tracer le pourcentage d’éléments défectueux dans un échantillon
+Carte R : carte de contrôle qui trace l’étendue d’un échantillon (ou d’un sous-groupe)
+Carte X-barre / R : carte de contrôle double représentant la variation d’un processus dans le temps. Ces cartes ne peuvent être utilisées qu’avec des données collectées en sous-groupe rationnels. La carte X-barre présente la variation au niveau de la moyenne (variation entre les moyennes des sous-groupes). La carte R présente la variabilité du processus (variation à l’intérieur des sous-groupes).
+Cause : Ce qui produit un effet ou entraîne une modification.
+Cause aléatoire ou commune : Source de variation naturelle et inhérente à un processus
+Cause assignable ou spéciale : Source de variation non naturelle du processus. Les causes spéciales de variation entrainent généralement des variations significatives et importantes du processus. Elles se manifestent et disparaissent de façon sporadique. Elles peuvent être temporaires ou de longues durées. Leur présence se manifeste sur les cartes de contrôles en appliquant les règles de Shewart.
+Centiles : Valeurs qui partagent en cent parties d’effectifs égaux la série des observations classée en ordre croissant.
+Confusion : Action de laisser deux ou plusieurs variables varier ensemble, de telle sorte qu’il soit impossible de séparer leurs effets uniques.
+Court terme : Intervalle de temps dépendant de la cadence du processus. Sur un intervalle « court terme », on s’attend à ce que seules se manifestent les causes de variation aléatoires.
+CTQ : Critical To Quality – caractéristique critique pour la perception de la qualité, d’un produit ou d’un service, par le client.
+Déciles : Valeurs qui partagent en dix parties d’effectifs égaux la série des observations classée en ordre croissant.
+Défaut : Un défaut est une erreur présentée par un seul élément. Un élément peut présenter plus d’un défaut.
+Défectueux : Un défectueux est un élément non-conforme (ex : un appareil qui ne fonctionne pas). Un élément est soit conforme, soit non-conforme (défectueux).
+Différence significative : Différence (entre plusieurs échantillons) confirmée par un test d’hypothèse. Nous avons la preuve statistique que la différence observée ne peut être obtenue par hasard (variation de cause aléatoire ou hasard de l’échantillonnage).
+Distribution (ou répartition) des individus selon une ou deux variables : Tableau (croisé s'il y a deux variables) des valeurs d’une (ou deux) variable(s) avec les effectifs correspondants.
+Distribution de probabilités : Double ensemble des événements et de leurs probabilités, présenté sous la forme d'un tableau ou d'une fonction.
+Données Continues : Données dont les valeurs peuvent prendre n’importe quel nombre au sein d’un intervalle. Les décimales sont significatives. Ce type de données nécessitent l’utilisation d’un appareil de mesure pour être et caractérisent, le plus souvent, des grandeurs physiques (longueur, tension, durée, masse, …).
+Données Discrètes : Données ne nécessitant pas d’appareil de mesure pour être collectées.
+  Elles sont obtenues le plus souvent par comptage.
+  Elles se décomposent en 4 catégories :
+  * comptage (ex : nombre d’occurrence, nombre de pannes, nombre de pièces défectueuses, …),
+  * pourcentage (rapport de 2 données de comptage),
+  * attributs (il n’est pas possible de classer ou d’ordonner les catégories ; ex : bleu, rouge, conforme, rebut, machine 1, machine 2, …),
+  * ordinales (ordonnées ; ex : insatisfait, satisfait, très satisfait, …).
+DPMO : Défauts Par Million d’Opportunités – unité utilisé pour calculer le niveau de sigma d’un processus.
+DPU : Défauts Par Unité – valeur moyenne exprimée par le rapport du nombre de défauts observés par le nombre d’unités inspectées.
+Ecart-type : Paramètre statistique de variabilité, qui décrit l’étalement d’un échantillon (et de là d’un processus).
+Echantillon (ou sondage) à deux (ou plusieurs) degrés : Echantillon au hasard d’unités « primaires », puis, dans les unités primaires, d’unités « secondaires » etc.
+Echantillon (ou sondage) aléatoire : Les individus présents dans la population ont, à chaque tirage, des probabilités inégales d’être prélevés.
+Echantillon (ou sondage) au hasard : Chaque individu présent dans la population a, à chaque tirage d’un individu de l’échantillon, la même probabilité d’être tiré. On peut procéder à un tirage au hasard avec ou sans « remise ». Dans le premier cas la probabilité est constante à chaque tirage.
+Echantillon (ou sondage) avec remise : Après chaque prélèvement l'individu est remis dans la population. Au contraire on peut prélever l'échantillon sans remise, ou de façon exhaustive.
+Echantillon (ou sondage) en grappe : La population ayant été divisée en « grappes » (individus « contigus »), échantillon au hasard de grappes.
+Echantillon (ou sondage) stratifié : La population est divisée en K & « strates ». On tire K échantillons au hasard, un dans chaque strate. L’échantillon est dit « représentatif » lorsque le taux de sondage est uniforme dans les strates (il ne faut pas confondre cet échantillon avec la notion générale d’échantillon « représentatif »).
+Echantillon prélevé par la méthode des quotas (en l’absence de base de sondage) : Choix raisonné d’individus selon des proportions (les quotas) exogènes de variables de contrôle. Les refus de répondre ne sont pas pris en compte. La représentativité n’est pas assurée.
+Echantillon représentatif : Echantillon qui reflète au mieux une condition ou un ensemble de conditions spécifiques au sein de la population (ou du processus).
+  A opposer à l’échantillon biaisé, qui ne présente qu’une partie des conditions d’une population (ou d’un processus).
+Effectif : Nombre d’individus, d’une population ou d’une partie quelconque de cette population.
+Effet : Ce qui a été produit par une cause.
+Effet d’un facteur : Influence de ce facteur (X) sur la variable de sortie (Y). Ecart observé entre les moyennes de Y lorsque X change de niveau.
+Erreur de type I (α) : Probabilité d’acceptation de l’hypothèse alternative alors qu’en réalité, c’est l’hypothèse nulle qui est vraie. Risque de conclure à tort, à une différence entre les échantillons.
+Erreur de type II (β) : Probabilité d’accepter l’hypothèse nulle alors qu’en réalité, c’est l’hypothèse alternative qui est vraie. Risque de ne pas voir la différence réelle entre les échantillons.
+Erreur résiduelle (ou erreur expérimentale) : Elle représente la variation de cause aléatoire présente lors de l’expérimentation. Il s’agit donc d’une quantité de variation qui ne peut pas être attribuée aux variables (X) incluses dans l’expérimentation.
+Espérance mathématique (d’une variable aléatoire uniquement) : - Valeur de cette V.A. dans le voisinage de laquelle on a une probabilité importante d’observer la valeur obtenue lorsqu’on réalise l’épreuve.
+  - Quand on répète l’épreuve associée à la V.A., la moyenne statistique des valeurs successives réellement observées tend vers l’espérance mathématique, lorsque le nombre des réalisations tend vers l’infini.
+Estimation (statistique) : Ordre de grandeur pour la valeur inconnue d’une statistique de population. S’obtient à partir d’une ou plusieurs statistiques (dites estimateurs) d’un échantillon représentatif de cette population.
+Etendue : Différence entre la valeur la plus élevée et la valeur la moins élevée au sein d’un échantillon ou d’un sous-groupe.
+Etude R&R : Analyse qui consiste à vérifier la Répétabilité et la Reproductibilité d’un système de mesure.
+  Le but du R&R est de vérifier que σ_mesure² soit faible par rapport à σ_processus² ; puisque σ_Total² = σ_processus² + σ_mesure²
+Expérience : Test mené dans des conditions bien définies pour déterminer un effet inconnu ; illustrer ou vérifier une loi connue ; tester ou établir une hypothèse.
+Facteurs : Dans un plan d’expériences ou une expérimentation, les facteurs sont les variables indépendantes testées (X) pour en mesurer l’influence (l’effet) sur la variable de sortie (Y).
+Fréquence (ou proportion) : Rapport d’un effectif particulier d’individus à la taille de la population (Excel confond parfois fréquence et effectif).
+Hypothèse alternative (Ha ou H1) : Dans un test d’hypothèse, l’hypothèse alternative est l’hypothèse de différence (différence entre les moyennes, les variances ou les proportions).
+  Cette hypothèse est supposée vraie dès lors que l’hypothèse nulle est rejetée.
+Hypothèse nulle (Ho) : Dans un test d’hypothèse, l’hypothèse nulle est l’hypothèse d’égalité (égalité des moyennes, des variances ou des proportions).
+  Cette hypothèse est supposée vraie tant que les preuves statistiques du contraire n’ont pas été apportées.
+Intervalle de confiance (I.C.) et niveau de confiance (α) : Intervalle de valeurs d’une variable quantitative dont la probabilité (niveau de confiance, α) est forte (par exemple 95%). L’intervalle est « Bilatéral » s’il est symétrique (les probabilités des intervalles à gauche et à droite de l’I.C. sont égales à α/2), « unilatéral » s’il est « cadré » à gauche ou à droite de l’étendue des valeurs.
+Limites de contrôle : Lignes horizontales tracées (en rouge avec Minitab) sur une carte de contrôle en vue de représenter les limites inférieures (Lower Control Limit) et supérieures (Upper Control Limit) de variation naturelle du processus. Elles représentent ce que le processus actuel est capable de faire (+/- 3σ).
+Limites de spécifications : (Lower Spec Limit – Upper Spec Limit) Limites imposées par le client et précisant ce qui est acceptable de ce qui ne l’est pas (souvent appelées tolérances). Elles représentent ce que le processus devrait être capable de faire. Elles sont totalement différentes, par nature, des limites de contrôle.
+Limites de surveillance : Limites tracées sur un diagrammes chronologiques (souvent au 2/3 de la tolérance) servant à indiquer à l’opérateur qu’une action est nécessaire. Elles sont totalement différentes, par nature, des limites de contrôle.
+Loi de distribution de probabilités (d’une variable aléatoire uniquement) : Cas particulier ou les probabilités sont calculées par une fonction mathématique des valeurs (exemples de la loi binomiale et de la loi de Gauss).
+Long terme : Intervalle de temps dépendant de la cadence du processus. Sur un intervalle de temps long terme, les causes de variation aléatoires et les causes spéciales de variation peuvent se manifester.
+Médiane, quartiles, déciles, centiles : (Seulement pour une variable ordinale ou quantitative). Ce sont les valeurs de la variable qui correspondent respectivement à 50%, 25% 50% et 75%, 10% à 90%, 1% à 99% de l’effectif des individus rangés par valeurs croissantes.
+Mode : Valeur la plus fréquente des valeurs d’un échantillon.
+Moyenne : Seulement pour une variable quantitative. Valeur uniforme que devrait présenter chaque individu d’un ensemble (population ou échantillon) pour que le total de l’ensemble soit inchangé. C’est, dans le cas de la moyenne arithmétique, le quotient de la somme par l’effectif. Contre-exemple de condensateurs en série : La capacité moyenne est la moyenne harmonique des capacités. La moyenne est une statistique dite de tendance centrale.
+MSP : Maitrise Statistique des Procédés (voir SPC).
+Niveau de confiance : Probabilité qu’une variable se trouve dans un intervalle défini.
+Niveau de sigma : Il s’agit d’une unité de mesure statistique qui reflète l’aptitude du processus à délivrer un résultat conformément aux attentes « Clients ». L’échelle de mesure du niveau de sigma est en corrélation parfaite avec des caractéristiques telles que le DPU, les pièces défectueuses par million et la probabilité d’une défaillance/erreur. 6s signifie pas plus de 3,4 défauts par million d’opportunités.
+Niveaux d’un facteur : Dans un plan d’expériences, désignent les conditions testées pour le facteur considéré (ex : Pression 2 bars ou 4 bars, l’effet de la pression est ici testé à deux niveaux différents).
+Paramètre statistique : Tout nombre, calculé à propos d’une population, et qui contribue à décrire un aspect de cette population, est une statistique. Fréquences, médianes, quartiles, déciles, moyennes, variances, etc. sont des statistiques (ou paramètres statistiques).
+Population et individus : La population est l’ensemble des individus (ou unités statistiques). Sa taille est habituellement désignée par N.
+Pourcentage de défectueux : Il s’agit d’une valeur entre 0 et 100. Par exemple, si 10 unités sur 500 sont défectueuses au sein d’un échantillon, le pourcentage de défectueux est 2.
+PPM : Parties Par Million – c’est le nombre de défauts pour un million d’unités = DPU * 1 000 000
+Prévision : Information concernant le futur. En statistique, ordre de grandeur pour la valeur future, donc inconnue, d’une statistique d’échantillon aléatoire, calculée à partir de valeurs statistiques connues de la population dont il est extrait.
+Probabilité d’un événement (futur) : Ce nombre, compris entre 0 (probabilité d’un événement impossible), et 1 (probabilité d’un événement certain) est d’autant plus proche de 1 ou de 0 que cet événement est plus ou moins vraisemblable. Un risque (une chance) est la probabilité d’un événement redouté (espéré).
+  Le calcul des probabilités est l’ensemble des règles pour calculer la probabilité d’un événement, ce qui ne peut se faire qu’en fonction de celles d’autres événements supposées connues.
+Processus sous contrôle : Processus ne présentant aucune cause spéciale.
+Proportions de défectueux : Il s’agit d’une valeur entre 0 et 1. Par exemple, si 10 unités sont défectueuses sur 500, la proportion de défectueux est 0,02.
+Quartiles : Valeurs partageant en 4 parties, d’effectifs égaux la série classée en ordre croissant des observations de l’échantillon (le 2ème quartile est la médiane).
+Recensement : Recueil des valeurs de la totalité des individus de la population. Les valeurs recueillies sont les données.
+Répétabilité : Aptitude d’un système de mesure à donner des valeurs proches (voire identiques) lorsque le même opérateur mesure plusieurs fois la même caractéristique sur une même pièce.
+Représentations géométriques des distributions : - Pour une variable qualitative : diagramme circulaire (« camembert »).
+  - Pour une variable ordinale ou quantitative discrète : diagramme ou graphique en bâtons.
+  - Pour une variable ordinale ou quantitative continue : histogramme et courbe des fréquences cumulées.
+  - Pour deux variables quantitatives ou ordinales : nuage de points.
+Reproductibilité : Aptitude d’un système de mesure à donner des valeurs proches (voire identiques) lorsqu’une caractéristique d’une même pièce est mesurée plusieurs fois par plusieurs opérateurs.
+Sigma : Lettre de l’alphabet grec (σ), s’utilise pour désigner l’écart-type d’une population.
+SIPOC : Supplier, Input, Process, Output, Customer – outil utilisé par l’équipe projet en phase « Définir » pour déterminer le périmètre du projet, les sorties et les clients du processus.
+Sondage, n-échantillon, base de sondage, taux de sondage : Un sondage est le recueil des valeurs d’une partie (l’échantillon) d’effectif n (d’où l’expression n-échantillon) de la population (dite base de sondage). Le taux de sondage est le rapport n/N.
+Sous-groupe : Regroupement logique d’objets ou d’évènements qui présente seulement des variations aléatoires d’un événement à l’autre. Par exemple, les objets ou les évènements sont regroupés pour créer des groupes homogènes (on parle alors de sous-groupes rationnels) sans aucune cause spéciale.
+SPC : Statistical Process Control (voir MSP).
+Statistique descriptive : Ensemble des techniques du statisticien pour décrire, numériquement, graphiquement, les populations.
+Statistique inférentielle : ou encore inductive, elle consiste à induire des résultats sur une population à partir d’un échantillon en précisant si possible la marge d’erreur (donc en faisant appel au calcul des probabilités).
+Test d’hypothèse : Outil statistique utilisé pour juger de la pertinence d’une hypothèse (Ho). Il existe différents tests d’hypothèse en fonction de la nature du paramètre à tester (moyenne, variance, proportion, normalité) et du nombre d’échantillons.
+  Nota : un test d’hypothèse est, par nature, négatif. Accepter l’hypothèse Ho ne signifie pas que cette hypothèse est vraie, mais seulement que les données disponibles ne sont pas incompatibles avec cette hypothèse et que l’on n’a pas de raison suffisante de lui préférer l’hypothèse alternative.
+Test statistique : Procédure pour juger de la vraisemblance de la valeur d’une statistique hypothétique d’une population. On compare la valeur observée pour une statistique d’échantillon au hasard dans cette population, à celles attendues en supposant l’hypothèse vraie. On juge l’hypothèse fausse, si l’écart observé est supérieur à un seuil, fixé en fonction d’un risque d’erreur.
+Univers des possibles, épreuve : L’univers des possibles est un ensemble d’événements futurs, possibles, mais dont la réalisation ne peut pas être prédite, associés à une action appelée épreuve. L’épreuve est aléatoire quand la vraisemblance de la réalisation de chacun des événements futurs possibles associés peut être exprimée par un nombre appelé probabilité.
+  Cette épreuve doit alors nécessairement pouvoir être répétée à l’identique. Alors, quand le nombre de répétitions à l’identique tend vers l’infini, la fréquence de réalisation d’un événement tend vers sa probabilité. On ne peut donc jamais mesurer une probabilité, seulement la calculer, ou l’estimer.
+Variable aléatoire (V.A.) : Epreuve aléatoire dont les événements futurs sont quantitatifs (on parle alors de résultats).
+Variable d’intérêt, variable explicative : Une variable est dite explicative si elle influence une autre variable, dite d’intérêt c’est-à-dire qui fait l’objet de l’étude statistique. Une variable explicative peut servir à stratifier la population.
+Variable, ou caractère ordinal : Variable qualitative dont on peut tout de même comparer les modalités entre elles, et, par conséquent, ranger par « valeurs croissantes » ou « décroissantes ».
+  Exemple de l’appréciation d’un produit par des consommateurs.
+Variable, ou caractère qualitatif (ou nominal) : Variable dont les valeurs (ou modalités) observées sont telles qu’il est impossible d’attribuer une valeur unique à la réunion de deux (ou plusieurs) individus par une opération mathématique sur leurs valeurs.
+  Exemple du « statut matrimonial ». Les valeurs observées peuvent néanmoins être numériques.
+Variable, ou caractère quantitatif : Variable numérique telle qu’on peut calculer, par une opération mathématique quelconque, comme l’addition, pour deux (ou plusieurs) individus, une valeur appelée total, à partir des valeurs de ces individus. Pour l’addition il s’agit de la somme.
+  Exemple des ventes annuelles = somme des ventes de l’ensemble de tous les jours ouvrés de l’année. Contre-exemple de l’étage, pour des logements. Les valeurs observées forment un ensemble continu ou non, infini ou non.
+Variable, ou caractère statistique (valeurs) : Une variable est une information dont on recueille (observation ou mesure) la valeur sur chaque individu. On parle de variable parce que la valeur de l’information n’est pas la même d’un individu à l’autre. C’est à partir des valeurs observées que le statisticien construit ses classements d’individus.
+Variance : Seulement pour une variable quantitative.
+  Indicateurs de la dispersion des valeurs des individus autour de la moyenne.
+  La variance est la moyenne des carrés des écarts à la moyenne. L’écart-type est sa racine carrée.
+  Ce sont des statistiques de dispersion.
+VOC : Voice Of Customer – outil de l’étape « Définir » qui permet à l’équipe projet de capter les attentes et les besoins des clients (internes et/ou externes). Les attentes et besoins sont ensuite convertis en CTQ.
+X : Variable d’entrée – caractéristique mesurable (données continues), quantifiable (données de comptage) ou évaluable (données par attributs) faisant référence à une entrée ou à un paramètre du processus.
+Y : Variable de sortie – caractéristique mesurable (données continues), quantifiable (données de comptage) ou évaluable (données par attributs) faisant référence à un résultat du processus.

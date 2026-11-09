@@ -5,6 +5,8 @@
 #    carte        : cartes de contrôle (X-barre/R, X-barre/S, I-MR)
 #    rr1          : étude R&R de type 1 (biais, répétabilité, Cg/Cgk)
 #    rr_croisee   : étude R&R croisée (méthode ANOVA, conventions Minitab)
+#    rr_emboitee  : étude R&R emboîtée (pièces emboîtées dans les opérateurs)
+#    anova2       : ANOVA à deux facteurs (avec ou sans interaction)
 #  Ce fichier est chargé par cli_statistique.R (il utilise ses fonctions utilitaires).
 #  Auteur : Jean-François BRUNET – JFBConseils – Novembre 2026
 # =============================================================================
@@ -848,6 +850,198 @@ cmd_rr_croisee <- function(d, p) {
 }
 
 # =============================================================================
+#  ANOVA à deux facteurs (avec ou sans interaction) — sommes des carrés ajustées (type III, comme Minitab)
+# =============================================================================
+cmd_anova2 <- function(d, p) {
+  vn <- nom_colonne(d, p$valeur, "Colonne des mesures"); an <- nom_colonne(d, p$facteur_a, "Facteur A"); bn <- nom_colonne(d, p$facteur_b, "Facteur B")
+  if (length(unique(c(vn, an, bn))) < 3) stop("La réponse et les deux facteurs doivent être trois colonnes différentes.", call. = FALSE)
+  inter <- !identical(p$interaction, FALSE) && !identical(p$interaction, "false")
+  y <- col_num(d, vn); ga <- ch_cat(d[[an]]); gb <- ch_cat(d[[bn]])
+  ok <- is.finite(y) & !is.na(ga) & !is.na(gb)
+  avert <- list()
+  if (sum(!ok) > 0) avert <- c(avert, list(sprintf("%d ligne(s) incomplète(s) écartée(s).", sum(!ok))))
+  A <- factor(ga[ok], levels = force_ordre_numerique(unique(ga[ok]))); B <- factor(gb[ok], levels = force_ordre_numerique(unique(gb[ok]))); y <- y[ok]
+  if (nlevels(A) < 2 || nlevels(B) < 2) stop("Chaque facteur doit avoir au moins 2 niveaux.", call. = FALSE)
+  cell <- table(A, B)
+  if (inter && any(cell == 0)) { inter <- FALSE; avert <- c(avert, list("Certaines combinaisons des deux facteurs n'ont aucune mesure : l'interaction n'est pas estimable et a été retirée du modèle.")) }
+  equilibre <- length(unique(as.vector(cell))) == 1
+  dd <- data.frame(y = y, A = A, B = B)
+  contrasts(dd$A) <- stats::contr.sum(nlevels(A)); contrasts(dd$B) <- stats::contr.sum(nlevels(B))
+  form <- if (inter) y ~ A * B else y ~ A + B
+  X <- stats::model.matrix(form, dd); asg <- attr(X, "assign"); etiq <- attr(stats::terms(form), "term.labels")
+  rss <- function(M) { f <- stats::lm.fit(M, dd$y); sum(f$residuals^2) }
+  fitc <- stats::lm.fit(X, dd$y); n <- length(y); rang <- fitc$rank
+  dfe <- n - rang; SSe <- sum(fitc$residuals^2)
+  if (dfe < 1) stop("Pas assez de mesures : il faut plusieurs mesures par combinaison des facteurs (ou retirer l'interaction) pour estimer l'erreur.", call. = FALSE)
+  MSe <- SSe / dfe
+  SS <- DF <- numeric(length(etiq))
+  for (i in seq_along(etiq)) { Xr <- X[, asg != i, drop = FALSE]; SS[i] <- rss(Xr) - SSe; DF[i] <- sum(asg == i) }
+  MS <- SS / DF; Fv <- MS / MSe; pv <- stats::pf(Fv, DF, dfe, lower.tail = FALSE)
+  sst <- sum((y - mean(y))^2)
+  nom_t <- c(an, bn, sprintf("%s × %s", an, bn))[seq_along(etiq)]
+  tab <- data.frame(Source = c(nom_t, "Erreur", "Total"), ddl = c(DF, dfe, n - 1), Somme_carres = c(SS, SSe, sst), Carre_moyen = c(MS, MSe, NA),
+                    F = c(Fv, NA, NA), p_value = c(pv, NA, NA), stringsAsFactors = FALSE)
+  eta <- SS / (SS + SSe)
+  eff <- data.frame(Source = nom_t, Eta2_partiel = eta, stringsAsFactors = FALSE)
+  moy_a <- data.frame(Niveau = levels(A), n = as.integer(table(A)), Moyenne = as.numeric(tapply(y, A, mean)), Ecart_type = as.numeric(tapply(y, A, stats::sd)), stringsAsFactors = FALSE)
+  moy_b <- data.frame(Niveau = levels(B), n = as.integer(table(B)), Moyenne = as.numeric(tapply(y, B, mean)), Ecart_type = as.numeric(tapply(y, B, stats::sd)), stringsAsFactors = FALSE)
+  mc <- tapply(y, list(A, B), mean)
+  tab_c <- data.frame(Niveau = levels(A), stringsAsFactors = FALSE); for (j in seq_len(nlevels(B))) tab_c[[levels(B)[j]]] <- as.numeric(mc[, j])
+  names(tab_c)[1] <- an
+  tables <- list(`ANOVA à deux facteurs` = tab, `Taille d'effet` = eff)
+  tables[[sprintf("Moyennes — %s", an)]] <- moy_a; tables[[sprintf("Moyennes — %s", bn)]] <- moy_b
+  if (nlevels(B) * nlevels(A) <= 60) tables$`Moyennes par combinaison` <- tab_c
+  # contrôle des résidus
+  rs <- fitc$residuals; ajus <- dd$y - rs
+  sw <- if (length(rs) >= 3 && length(rs) <= 5000 && stats::sd(rs) > 0) tryCatch(stats::shapiro.test(rs)$p.value, error = function(e) NA_real_) else NA_real_
+  cellf <- interaction(A, B, drop = TRUE)
+  fl <- if (nlevels(cellf) >= 2 && all(table(cellf) >= 2)) tryCatch(stats::fligner.test(y, cellf)$p.value, error = function(e) NA_real_) else NA_real_
+  lignes <- c(sprintf("Réponse : %s — facteurs : %s (%d niveaux) et %s (%d niveaux) — %d observations%s.", vn, an, nlevels(A), bn, nlevels(B), n, if (equilibre) sprintf(", plan équilibré (%d par combinaison)", cell[1, 1]) else ", plan déséquilibré"),
+              sprintf("Sommes des carrés ajustées (type III)%s.", if (inter) " ; modèle avec interaction" else " ; modèle sans interaction"), regle(), "")
+  for (i in seq_along(etiq)) {
+    h0 <- if (etiq[i] == "A:B") sprintf("H0 : pas d'interaction entre %s et %s", an, bn) else sprintf("H0 : les moyennes ne diffèrent pas selon %s", nom_t[i])
+    lignes <- c(lignes, sprintf("%s — F = %s ; p-value %s → %s", h0, fmt(Fv[i], 4), fmt_p(pv[i]),
+                                if (pv[i] < ALPHA) "H0 rejetée" else "H0 non rejetée"))
+  }
+  lignes <- c(lignes, "", sprintf("Contrôle des résidus — Shapiro-Wilk : p = %s ; homogénéité des variances entre combinaisons (Fligner-Killeen) : p = %s.", fmt_p(sw), fmt_p(fl)),
+              sprintf("Pour ces deux contrôles, H0 est l'hypothèse requise : elle est retenue si p-value ≥ α = %s.", alpha_txt()))
+  if (inter && length(pv) == 3 && pv[3] < ALPHA) {
+    lignes <- c(lignes, "L'interaction est significative : l'effet d'un facteur dépend du niveau de l'autre ; interpréter les effets principaux avec prudence (voir le graphique d'interaction).")
+  }
+  sig <- nom_t[pv < ALPHA]
+  concl <- if (length(sig)) sprintf("Effet(s) significatif(s) au risque α = %s : %s.", alpha_txt(), paste(sig, collapse = " ; ")) else sprintf("Aucun effet significatif au risque α = %s.", alpha_txt())
+  # comparaisons de Tukey pour les facteurs significatifs (plan équilibré uniquement)
+  if (equilibre) {
+    tk <- tryCatch(stats::TukeyHSD(stats::aov(form, data = dd), which = c("A", "B")[c(pv[1] < ALPHA, pv[2] < ALPHA)]), error = function(e) NULL)
+    if (!is.null(tk)) for (k in names(tk)) { m <- tk[[k]]; tables[[sprintf("Tukey — %s", if (k == "A") an else bn)]] <- data.frame(Comparaison = rownames(m), Difference = m[, "diff"], Borne_inf = m[, "lwr"], Borne_sup = m[, "upr"], p_ajustee = m[, "p adj"], stringsAsFactors = FALSE) }
+  } else avert <- c(avert, list("Plan déséquilibré : les comparaisons de Tukey ne sont pas fournies."))
+  avert <- c(avert, list("Vérifier l'indépendance des observations, la normalité des résidus et l'homogénéité des variances. Il faut au moins 2 mesures par combinaison pour tester l'interaction."))
+  if (!is.na(sw) && sw < ALPHA) avert <- c(avert, list("La normalité des résidus est rejetée : interpréter les p-values avec prudence."))
+  # figures
+  fig1 <- lire_png("anova2_effets.png", largeur = 1200, hauteur = 520)
+  par(mfrow = c(1, 3), mar = c(4.5, 4.5, 3, 1))
+  yl <- range(y); ec <- diff(yl) * 0.06; yl <- yl + c(-ec, ec)
+  pl <- function(g, nom) { m <- tapply(y, g, mean); plot(seq_along(m), m, type = "b", pch = 19, col = "#2a5d9f", xaxt = "n", xlab = nom, ylab = sprintf("Moyenne de %s", vn), main = sprintf("Effet principal — %s", nom), ylim = yl); axis(1, at = seq_along(m), labels = names(m)); abline(h = mean(y), lty = 3, col = "#888888") }
+  pl(A, an); pl(B, bn)
+  matplot(seq_len(nlevels(A)), mc, type = "b", pch = 19, lty = 1, col = PAL(nlevels(B)), xaxt = "n", xlab = an, ylab = sprintf("Moyenne de %s", vn), main = "Interaction", ylim = yl)
+  axis(1, at = seq_len(nlevels(A)), labels = levels(A)); legend("topleft", legend = levels(B), col = PAL(nlevels(B)), lty = 1, pch = 19, bty = "n", cex = 0.8, title = bn)
+  invisible(dev.off())
+  fig2 <- lire_png("anova2_residus.png", largeur = 1000, hauteur = 480)
+  par(mfrow = c(1, 2), mar = c(4.5, 4.5, 3, 1))
+  qq <- stats::qqnorm(rs, plot.it = FALSE); plot(qq$x, qq$y, pch = 19, cex = 0.8, col = "#2a5d9f", xlab = "Quantiles normaux", ylab = "Résidus", main = "Droite de Henry des résidus")
+  if (length(rs) >= 3) { qqs <- stats::quantile(rs, c(0.25, 0.75)); sl <- diff(qqs) / diff(stats::qnorm(c(0.25, 0.75))); abline(qqs[1] - sl * stats::qnorm(0.25), sl, col = "#b03030", lwd = 2) }
+  plot(ajus, rs, pch = 19, cex = 0.8, col = "#2a5d9f", xlab = "Valeurs ajustées", ylab = "Résidus", main = "Résidus selon les valeurs ajustées"); abline(h = 0, col = "#b03030", lwd = 2)
+  invisible(dev.off())
+  list(titre = "ANOVA à deux facteurs", lignes = c(lignes, "", concl), conclusion = concl, tables = tables, figures = c(fig1, fig2), avertissements = avert)
+}
+
+# =============================================================================
+#  R&R emboîtée (pièces emboîtées dans les opérateurs : essais destructifs) — méthode ANOVA, conventions de Minitab
+#  Chaque pièce n'est mesurée que par un seul opérateur ; plan équilibré (même nombre de pièces par opérateur,
+#  même nombre de répétitions par pièce).
+# =============================================================================
+cmd_rr_emboitee <- function(d, p) {
+  pn <- nom_colonne(d, p$piece, "Pièces"); on <- nom_colonne(d, p$operateur, "Opérateurs"); mn <- nom_colonne(d, p$mesure, "Mesures")
+  if (length(unique(c(pn, on, mn))) < 3) stop("Les colonnes des pièces, des opérateurs et des mesures doivent être différentes.", call. = FALSE)
+  tol <- num(p$tolerance)
+  L <- num(p$l); if (is.na(L)) L <- 6
+  if (L <= 0) stop("Le multiplicateur L doit être strictement positif.", call. = FALSE)
+  if (!is.na(tol) && tol <= 0) stop("La tolérance doit être strictement positive.", call. = FALSE)
+  y <- col_num(d, mn); pc <- ch_cat(d[[pn]]); oc <- ch_cat(d[[on]])
+  ok <- is.finite(y) & !is.na(pc) & !is.na(oc)
+  avert <- list()
+  if (sum(!ok) > 0) avert <- c(avert, list(sprintf("%d ligne(s) incomplète(s) écartée(s).", sum(!ok))))
+  O <- factor(oc[ok], levels = unique(oc[ok]))
+  cle <- paste(oc[ok], pc[ok], sep = "\r")                               # une pièce = un couple (opérateur, numéro) : l'emboîtement
+  ordre_cle <- unique(cle[order(as.integer(O), match(pc[ok], force_ordre_numerique(unique(pc[ok]))))])
+  PO <- factor(cle, levels = ordre_cle)
+  dd <- data.frame(O = O, PO = PO, P = pc[ok], y = y[ok])
+  b <- nlevels(dd$O)
+  if (b < 2) stop("Il faut au moins 2 opérateurs.", call. = FALSE)
+  pieces_par_op <- tapply(as.character(dd$PO), dd$O, function(v) length(unique(v)))
+  if (length(unique(pieces_par_op)) != 1) stop(sprintf("Plan non équilibré : chaque opérateur doit mesurer le même nombre de pièces (de %d à %d pièces selon l'opérateur).", min(pieces_par_op), max(pieces_par_op)), call. = FALSE)
+  a <- unname(pieces_par_op[1])
+  cnt <- table(dd$PO)
+  if (length(unique(as.vector(cnt))) != 1) stop(sprintf("Plan non équilibré : chaque pièce doit être mesurée le même nombre de fois (de %d à %d mesures).", min(cnt), max(cnt)), call. = FALSE)
+  n <- unname(cnt[1])
+  if (a < 2) stop("Il faut au moins 2 pièces par opérateur.", call. = FALSE)
+  if (n < 2) stop("Il faut au moins 2 mesures par pièce (répétitions).", call. = FALSE)
+  commun <- Reduce(intersect, split(as.character(dd$P), dd$O))
+  if (length(commun) == length(unique(dd$P)) && length(commun) > 0)
+    avert <- c(avert, list("Les mêmes numéros de pièce apparaissent chez tous les opérateurs : ils sont traités comme des pièces différentes (plan emboîté). Si chaque opérateur mesure les mêmes pièces, utiliser la R&R croisée."))
+  if (a * b < 10) avert <- c(avert, list(sprintf("Seulement %d pièces au total : on recommande au moins 10 pièces représentatives de l'étendue du procédé.", a * b)))
+  if (b < 3) avert <- c(avert, list(sprintf("Seulement %d opérateurs : on en recommande au moins 3.", b)))
+
+  fit <- stats::aov(y ~ O + PO, data = dd)
+  sm <- summary(fit)[[1]]; rn <- trimws(rownames(sm))
+  SS <- setNames(sm[["Sum Sq"]], rn); DF <- setNames(sm[["Df"]], rn)
+  SSo <- SS[["O"]]; SSp <- SS[["PO"]]; SSe <- SS[["Residuals"]]
+  dfo <- DF[["O"]]; dfp <- DF[["PO"]]; dfe <- DF[["Residuals"]]
+  MSo <- SSo / dfo; MSp <- SSp / dfp; MSe <- SSe / dfe
+  div <- function(u, v) if (v == 0) Inf else u / v
+  Fo <- div(MSo, MSp); Fp <- div(MSp, MSe)
+  po <- stats::pf(Fo, dfo, dfp, lower.tail = FALSE); pp <- stats::pf(Fp, dfp, dfe, lower.tail = FALSE)
+  sstot <- SSo + SSp + SSe; dftot <- dfo + dfp + dfe
+  tab1 <- data.frame(Source = c("Opérateur", "Pièce (opérateur)", "Répétabilité (erreur)", "Total"), ddl = c(dfo, dfp, dfe, dftot),
+                     Somme_carres = c(SSo, SSp, SSe, sstot), Carre_moyen = c(MSo, MSp, MSe, NA), F = c(Fo, Fp, NA, NA), p_value = c(po, pp, NA, NA), stringsAsFactors = FALSE)
+  brut <- c((MSo - MSp) / (a * n), (MSp - MSe) / n)
+  s2o <- max(0, brut[1]); s2p <- max(0, brut[2]); s2rep <- MSe
+  s2rpd <- s2o; s2grr <- s2rep + s2rpd; s2tot <- s2grr + s2p
+  if (s2tot <= 0) stop("Variation totale nulle : les mesures sont identiques.", call. = FALSE)
+  src <- c("R&R totale", "  Répétabilité", "  Reproductibilité", "Pièce à pièce", "Variation totale")
+  vc <- c(s2grr, s2rep, s2rpd, s2p, s2tot); sd <- sqrt(vc)
+  pct_c <- 100 * vc / s2tot; pct_sv <- 100 * sd / sd[length(sd)]
+  tab_vc <- data.frame(Source = src, Composante_variance = vc, Contribution_pct = pct_c, stringsAsFactors = FALSE)
+  tab_sv <- data.frame(Source = src, Ecart_type = sd, Variation_etude = L * sd, Pct_variation_etude = pct_sv, stringsAsFactors = FALSE)
+  if (!is.na(tol)) tab_sv$Pct_tolerance <- 100 * L * sd / tol
+  tables <- list(`ANOVA emboîtée` = tab1, `Composantes de la variance` = tab_vc, `Variation d'étude` = tab_sv)
+  ndc <- floor(1.41 * sqrt(s2p) / sqrt(s2grr)); if (!is.finite(ndc)) ndc <- NA_integer_
+  sv_grr <- pct_sv[1]; c_grr <- pct_c[1]; tol_grr <- if (!is.na(tol)) 100 * L * sd[1] / tol else NA_real_
+  jugement <- function(v) if (is.na(v)) NA_character_ else if (v < 10) "acceptable" else if (v <= 30) "acceptable sous conditions" else "inacceptable"
+  concl <- sprintf("R&R totale : %s %% de la variation d'étude (%s), %s %% de la variance%s ; %s catégorie(s) distincte(s)%s.",
+                   fmt(sv_grr, 4), jugement(sv_grr), fmt(c_grr, 4),
+                   if (!is.na(tol)) sprintf(", %s %% de la tolérance (%s)", fmt(tol_grr, 4), jugement(tol_grr)) else "",
+                   if (is.na(ndc)) "?" else as.character(ndc), if (!is.na(ndc) && ndc < 5) " (il en faut au moins 5)" else "")
+  avert <- c(avert, list(sprintf("Conventions de Minitab : R&R emboîtée, méthode ANOVA, composantes aléatoires, variation d'étude sur L = %s écarts-types. Elle convient quand une pièce ne peut être mesurée que par un seul opérateur (essai destructif, par exemple) ; la reproductibilité mesure alors l'écart entre opérateurs, mêlé à l'écart entre les lots de pièces.", fmt(L, 3)),
+                         "Repères : moins de 10 % acceptable, de 10 à 30 % acceptable sous conditions, plus de 30 % inacceptable ; au moins 5 catégories distinctes."))
+  if (any(brut < 0)) avert <- c(avert, list("Une composante de variance estimée négative a été ramenée à 0 (convention de Minitab)."))
+
+  pcol <- PAL(b); lo <- levels(dd$O); np <- nlevels(dd$PO)
+  xp <- as.integer(dd$PO); op <- as.integer(dd$O)
+  lab_p <- vapply(levels(dd$PO), function(s) sub("^.*\r", "", s), "")
+  fig1 <- lire_png("rr_emboitee_composantes.png", largeur = 1100, hauteur = 860)
+  par(mfrow = c(2, 2), mar = c(4.5, 4.5, 3, 1))
+  idx <- c(1, 2, 3, 4)
+  met <- rbind(`% Contribution` = pct_c[idx], `% Variation d'étude` = pct_sv[idx])
+  if (!is.na(tol)) met <- rbind(met, `% Tolérance` = 100 * L * sd[idx] / tol)
+  barplot(met, beside = TRUE, col = c("#2a5d9f", "#e0a030", "#2e8b57")[seq_len(nrow(met))], names.arg = c("R&R totale", "Répétabilité", "Reproductib.", "Pièce à pièce"),
+          main = "Composantes de la variation", ylab = "%", ylim = c(0, max(110, max(met, na.rm = TRUE) * 1.05)), border = "white", cex.names = 0.85)
+  legend("topleft", legend = rownames(met), fill = c("#2a5d9f", "#e0a030", "#2e8b57")[seq_len(nrow(met))], bty = "n", cex = 0.8)
+  plot(xp, dd$y, xaxt = "n", pch = 19, col = pcol[op], xlab = "Pièce (emboîtée dans l'opérateur)", ylab = "Mesure", main = "Mesures par pièce", cex = 0.9)
+  axis(1, at = seq_len(np), labels = lab_p, las = if (np > 12) 2 else 1, cex.axis = 0.8)
+  mpo <- as.numeric(tapply(dd$y, dd$PO, mean)); points(seq_len(np), mpo, pch = 3, col = "#444444", cex = 1.2)
+  for (j in seq_len(b - 1)) abline(v = j * a + 0.5, lty = 3, col = "#888888")
+  legend("topleft", legend = lo, col = pcol, pch = 19, bty = "n", cex = 0.8, title = "Opérateur")
+  boxplot(y ~ O, data = dd, col = "#cfe0f5", xlab = "Opérateur", ylab = "Mesure", main = "Mesures par opérateur")
+  rg <- as.numeric(tapply(dd$y, dd$PO, function(v) diff(range(v))))
+  plot(seq_len(np), rg, type = "b", pch = 19, col = "#2a5d9f", xaxt = "n", xlab = "Pièce (emboîtée dans l'opérateur)", ylab = "Étendue des répétitions", main = "Répétabilité par pièce")
+  axis(1, at = seq_len(np), labels = lab_p, las = if (np > 12) 2 else 1, cex.axis = 0.8)
+  for (j in seq_len(b - 1)) abline(v = j * a + 0.5, lty = 3, col = "#888888")
+  abline(h = mean(rg), col = "#2e8b57", lwd = 2)
+  invisible(dev.off())
+
+  lignes <- c(sprintf("Plan : %d opérateurs × %d pièces par opérateur (soit %d pièces) × %d répétitions (%d mesures) — pièces emboîtées dans les opérateurs", b, a, a * b, n, nrow(dd)),
+              sprintf("Effet opérateur : p-value %s — effet pièce (dans l'opérateur) : p-value %s", fmt_p(po), fmt_p(pp)),
+              "",
+              sprintf("R&R totale : %s %% de la variance, %s %% de la variation d'étude%s", fmt(c_grr, 4), fmt(sv_grr, 4),
+                      if (!is.na(tol)) sprintf(", %s %% de la tolérance", fmt(tol_grr, 4)) else ""),
+              sprintf("Répétabilité : %s %% de la variation d'étude — reproductibilité : %s %%", fmt(pct_sv[2], 4), fmt(pct_sv[3], 4)),
+              sprintf("Nombre de catégories distinctes : %s", if (is.na(ndc)) "non calculable" else as.character(ndc)),
+              "", concl)
+  list(titre = "R&R emboîtée (méthode ANOVA)", lignes = lignes, conclusion = concl, tables = tables, figures = c(fig1), avertissements = avert)
+}
+
+# =============================================================================
 #  Génération de données aléatoires (lois diverses) — valeurs renvoyées dans « valeurs »
 # =============================================================================
 cmd_generer <- function(d, p) {
@@ -1173,6 +1367,27 @@ ajuster_loi <- function(id, x, B, graine) {
   }
   list(id = id, lib = L$lib, ok = TRUE, q = q, A2 = A2, ll = ll, aic = 2 * length(q) - 2 * ll, p = pv, noms = L$noms)
 }
+# Limites de confiance ponctuelles des centiles de la loi ajustée (au niveau 1 − α), comme sur les diagrammes de probabilité de Minitab.
+# Normale et log-normale : formule asymptotique du maximum de vraisemblance ; autres lois : bootstrap paramétrique (B tirages).
+# Renvoie une liste (inf, sup) de valeurs de la variable aux probabilités cumulées « pg ».
+bandes_probabilite <- function(id, x, q, pg, B = 250L, graine = 1L) {
+  L <- LOIS_ID[[id]]; n <- length(x); zc <- stats::qnorm(1 - ALPHA / 2)
+  if (id %in% c("normale", "lognormale")) {
+    u <- stats::qnorm(pg); ec <- zc * q[2] * sqrt((1 + u^2 / 2) / n); m <- q[1] + q[2] * u
+    return(if (id == "normale") list(inf = m - ec, sup = m + ec) else list(inf = exp(m - ec), sup = exp(m + ec)))
+  }
+  old <- if (exists(".Random.seed", envir = globalenv())) get(".Random.seed", envir = globalenv()) else NULL
+  on.exit(if (!is.null(old)) assign(".Random.seed", old, envir = globalenv()), add = TRUE)
+  set.seed(graine)
+  Q <- NULL
+  for (b in seq_len(B)) {
+    xb <- L$rng(n, q); qb <- tryCatch(L$fit(xb), error = function(e) NULL)
+    if (is.null(qb) || any(!is.finite(qb))) next
+    v <- suppressWarnings(L$quant(pg, qb)); if (all(is.finite(v))) Q <- rbind(Q, v)
+  }
+  if (is.null(Q) || nrow(Q) < 30) return(NULL)
+  list(inf = apply(Q, 2, stats::quantile, probs = ALPHA / 2, names = FALSE), sup = apply(Q, 2, stats::quantile, probs = 1 - ALPHA / 2, names = FALSE))
+}
 fmt_par <- function(r) paste(sprintf("%s = %s", r$noms, fmt(r$q, 5)), collapse = " ; ")
 
 cmd_identification <- function(d, p) {
@@ -1438,16 +1653,20 @@ cmd_serie <- function(d, p) {
 }
 
 # =============================================================================
-#  Lot 4 — Cartes de contrôle aux attributs (p et u), avec phases
+#  Lot 4 — Cartes de contrôle aux attributs (p, np, c et u), avec phases
 # =============================================================================
 cmd_carte_attributs <- function(d, p) {
-  type <- if (identical(p$type, "u")) "u" else "p"
+  type <- if (isTRUE(p$type %in% c("p", "u", "np", "c"))) p$type else "p"
   tests <- suppressWarnings(as.integer(unlist(p$tests))); tests <- tests[!is.na(tests) & tests >= 1 & tests <= 8]
   if (!length(p$tests)) tests <- 1:4
   lab <- NULL; nom_o <- NULL
   if (!is.null(p$ordre) && nzchar(p$ordre)) { nom_o <- nom_colonne(d, p$ordre, "Colonne d'ordre"); d <- d[order(d[[nom_o]], na.last = TRUE), , drop = FALSE]; lab <- etiq_ordre(d[[nom_o]]) }
-  dn <- nom_colonne(d, p$defauts, if (type == "p") "Colonne des unités défectueuses" else "Colonne des défauts"); x <- col_num(d, dn)
-  if (!is.null(p$effectif) && nzchar(p$effectif)) { en <- nom_colonne(d, p$effectif, "Colonne des effectifs"); n <- col_num(d, en)
+  dn <- nom_colonne(d, p$defauts, if (type %in% c("p", "np")) "Colonne des unités défectueuses" else "Colonne des défauts"); x <- col_num(d, dn)
+  en <- NULL
+  if (type == "c") { n <- rep(1, length(x))              # carte c : unités de même taille, aucun effectif à saisir
+    if (!is.null(p$effectif) && nzchar(p$effectif) && length(unique(col_num(d, nom_colonne(d, p$effectif, "Colonne des effectifs")))) > 1)
+      stop("La carte c suppose des unités de même taille ; avec des effectifs variables, utiliser la carte u (défauts par unité).", call. = FALSE)
+  } else if (!is.null(p$effectif) && nzchar(p$effectif)) { en <- nom_colonne(d, p$effectif, "Colonne des effectifs"); n <- col_num(d, en)
   } else { nc <- num(p$n); if (is.na(nc) || nc <= 0) stop("Choisir la colonne des effectifs contrôlés, ou saisir un effectif constant.", call. = FALSE); en <- NULL; n <- rep(nc, length(x)) }
   ph_rows <- NULL
   if (!is.null(p$phase) && nzchar(p$phase)) { pn <- nom_colonne(d, p$phase, "Colonne de phases"); ph_rows <- as.character(d[[pn]]) }
@@ -1458,37 +1677,40 @@ cmd_carte_attributs <- function(d, p) {
   if (k < 2) stop("Il faut au moins 2 points pour construire une carte de contrôle.", call. = FALSE)
   if (any(x < 0) || any(abs(x - round(x)) > 1e-8)) stop("Les nombres de défauts ou d'unités défectueuses doivent être des entiers positifs ou nuls.", call. = FALSE)
   if (any(n <= 0)) stop("Les effectifs contrôlés doivent être strictement positifs.", call. = FALSE)
-  if (type == "p" && any(x > n)) stop(sprintf("Ligne %d : le nombre d'unités défectueuses dépasse l'effectif contrôlé.", which(x > n)[1]), call. = FALSE)
+  if (type %in% c("p", "np") && any(x > n)) stop(sprintf("Ligne %d : le nombre d'unités défectueuses dépasse l'effectif contrôlé.", which(x > n)[1]), call. = FALSE)
   rupt <- num(p$rupture)
   if (is.null(ph) && !is.na(rupt)) ph <- ifelse(seq_len(k) < rupt, "Avant", "Après")
   if (!is.null(ph)) { ph <- as.character(ph); ph[is.na(ph)] <- "(vide)" }
   niv <- if (is.null(ph)) NULL else unique(ph)
   idx <- if (is.null(ph)) list(seq_len(k)) else lapply(niv, function(l) which(ph == l))
   if (!is.null(ph) && length(niv) < 2) { ph <- NULL; niv <- NULL; idx <- list(seq_len(k)) }
-  y <- x / n; cl <- lcl <- ucl <- sg <- rep(NA_real_, k)
+  y <- if (type %in% c("np", "c")) x else x / n; cl <- lcl <- ucl <- sg <- rep(NA_real_, k)
   for (j in seq_along(idx)) {
     ix <- idx[[j]]
     if (length(ix) < 2) stop(sprintf("La phase « %s » ne contient qu'un point : il en faut au moins 2 par phase.", niv[j]), call. = FALSE)
-    cb <- sum(x[ix]) / sum(n[ix]); cl[ix] <- cb
-    if (type == "p") { if (cb <= 0 || cb >= 1) stop(sprintf("%s : la proportion moyenne est %s, aucune limite de contrôle n'est calculable.", if (is.null(ph)) "Carte p" else sprintf("Phase « %s »", niv[j]), fmt(cb)), call. = FALSE); sg[ix] <- sqrt(cb * (1 - cb) / n[ix]) }
-    else { if (cb <= 0) stop(sprintf("%s : aucun défaut observé, aucune limite de contrôle n'est calculable.", if (is.null(ph)) "Carte u" else sprintf("Phase « %s »", niv[j])), call. = FALSE); sg[ix] <- sqrt(cb / n[ix]) }
+    cb <- sum(x[ix]) / sum(n[ix])
+    qui <- if (is.null(ph)) "" else sprintf("Phase « %s » : ", niv[j])
+    if (type %in% c("p", "np")) { if (cb <= 0 || cb >= 1) stop(sprintf("%sla proportion moyenne est %s, aucune limite de contrôle n'est calculable.", qui, fmt(cb)), call. = FALSE)
+      if (type == "p") { cl[ix] <- cb; sg[ix] <- sqrt(cb * (1 - cb) / n[ix]) } else { cl[ix] <- n[ix] * cb; sg[ix] <- sqrt(n[ix] * cb * (1 - cb)) } }
+    else if (type == "u") { if (cb <= 0) stop(sprintf("%saucun défaut observé, aucune limite de contrôle n'est calculable.", qui), call. = FALSE); cl[ix] <- cb; sg[ix] <- sqrt(cb / n[ix]) }
+    else { cb <- mean(x[ix]); if (cb <= 0) stop(sprintf("%saucun défaut observé, aucune limite de contrôle n'est calculable.", qui), call. = FALSE); cl[ix] <- cb; sg[ix] <- sqrt(cb) }
     ucl[ix] <- cl[ix] + 3 * sg[ix]; lcl[ix] <- cl[ix] - 3 * sg[ix]
   }
-  lcl <- pmax(lcl, 0); if (type == "p") ucl <- pmin(ucl, 1)
+  lcl <- pmax(lcl, 0); if (type == "p") ucl <- pmin(ucl, 1); if (type == "np") ucl <- pmin(ucl, n)
   sig1 <- list()
   fusion <- function(a, b) { for (nm in names(b)) a[[nm]] <- c(a[[nm]], b[[nm]]); a }
   for (ix in idx) { r <- tests_causes_speciales(y[ix], cl[ix], sg[ix], tests); sig1 <- fusion(sig1, lapply(r, function(v) ix[v])) }
   sig1 <- sig1[order(as.integer(names(sig1)))]
   nsig <- length(unique(unlist(sig1)))
   marque <- function(s, kk) { r <- character(kk); for (t in names(s)) r[s[[t]]] <- ifelse(nzchar(r[s[[t]]]), paste0(r[s[[t]]], ",", t), t); r }
-  nom <- if (type == "p") "Proportion d'unités défectueuses (carte p)" else "Défauts par unité (carte u)"
+  nom <- switch(type, p = "Proportion d'unités défectueuses (carte p)", np = "Nombre d'unités défectueuses (carte np)", u = "Défauts par unité (carte u)", c = "Nombre de défauts (carte c)")
   longues <- !is.null(lab) && max(nchar(lab), 0, na.rm = TRUE) > 8
   fig <- lire_png("carte_attributs.png", largeur = max(900, min(2000, 20 * k + 500)), hauteur = 560 + if (longues) 160 else 0)
   par(mar = c(4.5, 4.5, 2.5, 7))
-  trace_carte(nom, etiq, y, cl, lcl, ucl, sg, sig1, if (type == "p") "Proportion" else "Défauts par unité", any(tests %in% 5:8), if (!is.null(nom_o)) nom_o else "Échantillon", ph)
+  trace_carte(nom, etiq, y, cl, lcl, ucl, sg, sig1, switch(type, p = "Proportion", np = "Unités défectueuses", u = "Défauts par unité", c = "Défauts"), any(tests %in% 5:8), if (!is.null(nom_o)) nom_o else "Échantillon", ph)
   invisible(dev.off())
-  lignes <- c(sprintf("Carte %s — %d points%s.", type, k, if (!is.null(en)) sprintf(", effectif variable (colonne « %s »)", en) else sprintf(", effectif constant de %s", fmt(n[1]))))
-  if (is.null(ph)) lignes <- c(lignes, sprintf("%s : %s ; LIC = %s ; LSC = %s%s", if (type == "p") "Proportion moyenne" else "Taux moyen", fmt(cl[1], 6), fmt(lcl[1], 6), fmt(ucl[1], 6), if (length(unique(n)) > 1) " (limites variables, valeurs du premier point)" else ""))
+  lignes <- c(sprintf("Carte %s — %d points%s.", type, k, if (type == "c") ", unités de taille constante" else if (!is.null(en)) sprintf(", effectif variable (colonne « %s »)", en) else sprintf(", effectif constant de %s", fmt(n[1]))))
+  if (is.null(ph)) lignes <- c(lignes, sprintf("%s : %s ; LIC = %s ; LSC = %s%s", switch(type, p = "Proportion moyenne", np = "Nombre moyen d'unités défectueuses", u = "Taux moyen", c = "Nombre moyen de défauts"), fmt(cl[1], 6), fmt(lcl[1], 6), fmt(ucl[1], 6), if (length(unique(n)) > 1) " (limites variables, valeurs du premier point)" else ""))
   else for (j in seq_along(idx)) { i1 <- idx[[j]][1]; lignes <- c(lignes, sprintf("Phase « %s » (%d points) : moyenne = %s ; LIC = %s ; LSC = %s", niv[j], length(idx[[j]]), fmt(cl[i1], 6), fmt(lcl[i1], 6), fmt(ucl[i1], 6))) }
   concl <- if (nsig == 0) sprintf("Aucun signal de cause spéciale (tests %s) : le procédé paraît sous contrôle statistique.", paste(tests, collapse = ", "))
            else sprintf("%d point(s) en signal de cause spéciale (tests %s) : le procédé n'est pas stable.", nsig, paste(names(sig1), collapse = ", "))
@@ -1499,9 +1721,12 @@ cmd_carte_attributs <- function(d, p) {
   if (k < 20) avert <- c(avert, list(sprintf("Seulement %d points : on recommande au moins 20 à 25 points pour établir des limites de contrôle fiables.", k)))
   if (hors > 0.1 * k && k >= 20) avert <- c(avert, list("Beaucoup de points hors limites : une variabilité supérieure à la loi binomiale/de Poisson (surdispersion) est possible ; en tenir compte avant de conclure à des causes spéciales."))
   if (type == "p") avert <- c(avert, list("Carte p : unités défectueuses par échantillon (loi binomiale). Pour compter plusieurs défauts par unité, utiliser la carte u."))
-  tab <- data.frame(Echantillon = etiq, n = n, Comptage = x, Valeur = y, LIC = lcl, LC = cl, LSC = ucl, Tests = marque(sig1, k), stringsAsFactors = FALSE)
+  if (type == "np") avert <- c(avert, list("Carte np : nombre d'unités défectueuses par échantillon (loi binomiale) ; elle convient surtout à des échantillons de taille constante, sinon préférer la carte p."))
+  if (type == "c") avert <- c(avert, list("Carte c : nombre de défauts par unité de contrôle de taille constante (loi de Poisson) ; si la taille varie, utiliser la carte u."))
+  tab <- if (type == "c") data.frame(Echantillon = etiq, Comptage = x, LIC = lcl, LC = cl, LSC = ucl, Tests = marque(sig1, k), stringsAsFactors = FALSE)
+         else data.frame(Echantillon = etiq, n = n, Comptage = x, Valeur = y, LIC = lcl, LC = cl, LSC = ucl, Tests = marque(sig1, k), stringsAsFactors = FALSE)
   if (!is.null(ph)) tab <- cbind(Phase = ph, tab)
-  tt <- if (type == "p") "Carte de contrôle p (proportion d'unités défectueuses)" else "Carte de contrôle u (défauts par unité)"
+  tt <- switch(type, p = "Carte de contrôle p (proportion d'unités défectueuses)", np = "Carte de contrôle np (nombre d'unités défectueuses)", u = "Carte de contrôle u (défauts par unité)", c = "Carte de contrôle c (nombre de défauts)")
   if (!is.null(ph)) tt <- paste0(tt, sprintf(" — %d phases (%s)", length(idx), paste(niv, collapse = " / ")))
   list(titre = tt, lignes = lignes, conclusion = concl, tables = list(Carte = tab), figures = c(fig), avertissements = avert)
 }
@@ -1650,10 +1875,16 @@ cmd_graphique <- function(d, p) {
       yy <- U(pp, r$q); g <- seq(min(xs), max(xs), length.out = 200); if (lg) g <- exp(seq(log(min(xs)), log(max(xs)), length.out = 200))
       yref <- U(pmin(pmax(L$cdf(g, r$q), 1e-9), 1 - 1e-9), r$q)
       tick_p <- c(0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99)
-      plot(xs, yy, pch = 19, col = "#2a5d9f", cex = 0.9, yaxt = "n", log = if (lg) "x" else "", xlab = nm, ylab = "Pourcentage cumulé", main = sprintf("%s — %s", titre, nm))
+      pg <- seq(0.003, 0.997, length.out = 120); bd <- bandes_probabilite(id, x, r$q, pg, graine = 20240601 + j)
+      yl <- range(yy, U(c(0.01, 0.99), r$q)); xl <- range(xs)
+      if (!is.null(bd)) { vis <- U(pg, r$q) >= yl[1] & U(pg, r$q) <= yl[2]; xl <- range(xl, bd$inf[vis], bd$sup[vis], finite = TRUE) }
+      plot(xs, yy, pch = 19, col = "#2a5d9f", cex = 0.9, yaxt = "n", log = if (lg) "x" else "", xlim = xl, ylim = yl, xlab = nm, ylab = "Pourcentage cumulé", main = sprintf("%s — %s", titre, nm))
       axis(2, at = U(tick_p, r$q), labels = c("1", "5", "10", "25", "50", "75", "90", "95", "99"), las = 1)
-      abline(h = U(tick_p, r$q), col = "#eeeeee"); lines(g, yref, col = "#b03030", lwd = 2); points(xs, yy, pch = 19, col = "#2a5d9f", cex = 0.9)
-      legend("bottomright", bty = "n", cex = 0.85, legend = c(sprintf("AD = %s", fmt(r$A2, 4)), sprintf("p-value = %s", fmt_p(r$p)), fmt_par(r)))
+      abline(h = U(tick_p, r$q), col = "#eeeeee"); lines(g, yref, col = "#b03030", lwd = 2)
+      if (!is.null(bd)) { yb <- U(pg, r$q); lines(bd$inf, yb, col = "#b03030", lty = 2, lwd = 1.3); lines(bd$sup, yb, col = "#b03030", lty = 2, lwd = 1.3) }
+      points(xs, yy, pch = 19, col = "#2a5d9f", cex = 0.9)
+      legend("bottomright", bty = "n", cex = 0.85, legend = c(sprintf("AD = %s", fmt(r$A2, 4)), sprintf("p-value = %s", fmt_p(r$p)), fmt_par(r),
+                                                              if (!is.null(bd)) sprintf("Limites de confiance à %s", conf_txt())))
       invisible(dev.off()); figs <- c(figs, f)
       lignes <- c(lignes, sprintf("%s (n = %d) : AD = %s ; p-value %s ; %s. %s", nm, length(x), fmt(r$A2, 4), fmt_p(r$p), fmt_par(r),
                                   decision(r$p, sprintf("la loi « %s » n'est pas rejetée.", L$lib), sprintf("les données ne suivent pas la loi « %s ».", L$lib))))

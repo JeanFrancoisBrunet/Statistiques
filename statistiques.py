@@ -5,12 +5,20 @@
 #  Application de bureau (Tkinter) et cœur partagé avec telegram_bot_statistiques.py.
 #  - Données : saisie / collage de texte, ou fichier (txt, csv, tsv, dat, xlsx)
 #  - Calculs : délégués à R (moteur_statistique.R via cli_statistique.R)
-#      statistiques descriptives, normalité (Shapiro-Wilk), tests t, ANOVA à un facteur
-#      (+ Tukey), capabilité (Cp/Cpk/Pp/Ppk), Kappa de Cohen
+#      statistiques descriptives, normalité (Shapiro-Wilk), tests t, Z, F, Poisson, ANOVA à un et à deux
+#      facteurs (+ Tukey), khi², capabilité (Cp/Cpk/Pp/Ppk), cartes de contrôle (X-barre, I-MR, p, np, c, u),
+#      R&R (croisée, emboîtée, type 1), Kappa de Cohen, régression, séries chronologiques, génération de données
 #  - Au lancement : écran d'accueil avec icons/6Sigma.png
 #
-#  Dépendances : Python 3 + Tkinter (python3-tk) ; R + jsonlite (r-base, r-cran-jsonlite)
-#                openpyxl (facultatif, lecture des fichiers .xlsx) ; Pillow (facultatif)
+#  Dépendances (Raspberry Pi OS / Debian) :
+#    Obligatoires : python3 + Tkinter, R + jsonlite
+#                   sudo apt install -y r-base r-cran-jsonlite python3-tk
+#    Recommandées : Pillow avec ImageTk (affichage des graphiques)      sudo apt install -y python3-pil.imagetk
+#                   xclip (bouton « Copier image » sous X11 ; wl-clipboard sous Wayland)
+#                                                                       sudo apt install -y xclip
+#                   reportlab (rapport PDF)                             sudo apt install -y python3-reportlab
+#    Facultatives : openpyxl (lecture des fichiers .xlsx)               pip install openpyxl --break-system-packages
+#                   python3-requests (uniquement pour le bot Telegram)  sudo apt install -y python3-requests
 #  Lancement   : python3 statistiques.py
 #  Le bot Telegram importe ce module : tkinter n'est chargé que pour l'interface.
 #  Auteur : Jean-François BRUNET – JFBConseils – Novembre 2026
@@ -124,16 +132,20 @@ DOSSIER_ILLUSTRATIONS = DOSSIER / "illustrations"
 # (clé, titre) : les images d'un thème se nomment <clé>.png, ou <clé>_1.png, <clé>_2.png… (dans le dossier « illustrations »)
 ILLUSTRATIONS = [
     ("demarche_6sigma", "Démarche 6 Sigma"), 
+    ("types_donnees", "Données Variables Vs Attributs"),
     ("dpmo", "Défauts par Million d'Opportunités"), 
     ("multi_variations", "Variations multiples"), 
+    ("causes_commune_speciale", "Causes Communes Vs Spéciales"), 
     ("stat_descriptive", "Statistiques Descriptives"),  
     ("stat_inferentielle", "Statistiques Inférentielles"),
     ("interpreter_distribution", "Interpréter une distribution"), 
+    ("interpreter_p_value", "Interpréter une P-value"), 
     ("moyenne_ecart_type", "Moyenne et écart-type"),
     ("loi_normale", "Loi normale"),
     ("droite_henry", "Interpréter une droite d'Henry"),
     ("boite_moustaches", "Boîte à moustaches"),
     ("pareto", "Pareto"),
+    ("msa", "Analyse Système Mesure"),
     ("carte_controle", "Cartes de Contrôle"),
     ("tests_hypotheses", "Tests d'hypothèses"),
     ("risques_alpha_beta", "Risques α et β"),
@@ -148,9 +160,10 @@ ILLUSTRATIONS = [
     ("kruskal_wallis", "Test de Kruskal-Wallis"),
 ]
 # thème proposé par le bouton « Illustration… » de chaque onglet d'analyse
-ILLUSTRATION_ONGLET = {"Descriptif": "moyenne_ecart_type", "Normalité": "droite_henry", "Test t": "test_t_1", "Test Z": "test_z",
+ILLUSTRATION_ONGLET = {"Descriptif": "stat_descriptive", "Normalité": "loi_normale", "Test t": "test_t_1", "Test Z": "test_z", "Khi²": "khi2",
                        "Identification de loi": "interpreter_distribution", "Graphiques": "boite_moustaches",
-                       "ANOVA": "tests_hypotheses", "Test F": "bartlett", "Khi²": "khi2"}
+                       "ANOVA": "tests_hypotheses", "ANOVA 2 facteurs": "tests_hypotheses", "R&R": "msa",
+                       "Cartes de contrôle": "carte_controle", "Cartes d'attributs": "carte_controle", "Données": "types_donnees", "Rapport": "demarche_6sigma"}
 
 
 def images_illustration(cle):
@@ -160,6 +173,79 @@ def images_illustration(cle):
     return sorted((f for f in DOSSIER_ILLUSTRATIONS.iterdir()
                    if f.suffix.lower() == ".png" and (f.stem.lower() == cle or f.stem.lower().startswith(cle + "_"))),
                   key=lambda f: f.name.lower())
+
+
+# ---- Vocabulaire : fichier texte « Terme : définition », complété au fur et à mesure (lu aussi par le bot et l'interface web) ----
+FICHIER_VOCABULAIRE = DOSSIER / "vocabulaire.txt"
+ENTETE_VOCABULAIRE = [
+    "# Vocabulaire du programme Statistiques — un terme par entrée, au format « Terme : définition ».",
+    "# Pour compléter la liste : ajouter une ligne (ou utiliser le bouton « Ajouter… » de l'onglet Vocabulaire), puis « Recharger » dans le programme.",
+    "# Une définition peut continuer sur les lignes suivantes, si elles commencent par deux espaces.",
+    "# Les lignes qui commencent par # sont ignorées. Ce fichier est lu par l'application de bureau, l'interface web et le bot Telegram."]
+
+
+def cle_tri_texte(s):
+    """Clé de tri et de recherche : sans accents ni majuscules."""
+    import unicodedata
+    return "".join(c for c in unicodedata.normalize("NFD", str(s).lower()) if unicodedata.category(c) != "Mn")
+
+
+def lire_vocabulaire(chemin=None):
+    """Liste triée de (terme, définition) lue dans le fichier de vocabulaire ; [] s'il n'existe pas.
+    Format : « Terme : définition » ; les lignes suivantes commençant par une espace prolongent la définition ; # = commentaire."""
+    chemin = Path(chemin) if chemin else FICHIER_VOCABULAIRE
+    try:
+        lignes = chemin.read_text(encoding="utf-8-sig").splitlines()
+    except OSError:
+        return []
+    termes = []
+    for lg in lignes:
+        if not lg.strip() or lg.lstrip().startswith("#") and not lg[:1].isspace():
+            continue
+        if lg[:1].isspace():
+            if termes:
+                termes[-1][1].append(lg.strip())
+            continue
+        m = re.match(r"^(.*?)\s:(?:\s+(.*))?$", lg.replace("\xa0", " "))
+        if m:
+            termes.append([m.group(1).strip(), [m.group(2).strip()] if m.group(2) and m.group(2).strip() else []])
+    return sorted(((t, "\n".join(d)) for t, d in termes), key=lambda e: cle_tri_texte(e[0]))
+
+
+def ecrire_vocabulaire(termes, chemin=None):
+    """Réécrit le fichier de vocabulaire (trié) en conservant les lignes de commentaires de tête."""
+    chemin = Path(chemin) if chemin else FICHIER_VOCABULAIRE
+    entete = []
+    try:
+        for lg in chemin.read_text(encoding="utf-8-sig").splitlines():
+            if lg.lstrip().startswith("#") or (not lg.strip() and not entete):
+                entete.append(lg)
+            elif lg.strip():
+                break
+    except OSError:
+        pass
+    entete = [l for l in entete if l.strip()] or list(ENTETE_VOCABULAIRE)
+    sortie = list(entete) + [""]
+    for terme, definition in sorted(termes, key=lambda e: cle_tri_texte(e[0])):
+        morceaux = [l.strip() for l in str(definition).splitlines() if l.strip()]
+        sortie.append(f"{terme.strip()} : {morceaux[0] if morceaux else ''}".rstrip())
+        sortie += ["  " + l for l in morceaux[1:]]
+    tmp = chemin.with_name(chemin.name + ".tmp")
+    tmp.write_text("\n".join(sortie) + "\n", encoding="utf-8")
+    tmp.replace(chemin)
+
+
+def chercher_vocabulaire(termes, requete, dans_definitions=True):
+    """Termes correspondant à la requête (tous les mots, sans tenir compte des accents ni de la casse) :
+    d'abord ceux dont le nom correspond, puis ceux dont seule la définition correspond."""
+    mots = cle_tri_texte(requete).split()
+    if not mots:
+        return list(termes)
+    dans_nom = [e for e in termes if all(m in cle_tri_texte(e[0]) for m in mots)]
+    if not dans_definitions:
+        return dans_nom
+    reste = [e for e in termes if e not in dans_nom and all(m in cle_tri_texte(e[0] + " " + e[1]) for m in mots)]
+    return dans_nom + reste
 
 
 AUCUN_GROUPE = "— aucun —"
@@ -1054,6 +1140,7 @@ Données :
   le nombre de valeurs, le nom de la variable, le nombre de décimales et, si on le souhaite, une valeur d'initialisation pour retrouver exactement le même tirage. La variable s'ajoute aux données chargées, ou les remplace si on le demande.
 
 Organisation : les onglets sont regroupés (Description, Tests, Modélisation, Qualité, Graphiques) ; l'onglet Illustrations affiche les images de référence (PNG) du dossier « illustrations », et le bouton « Illustration… » de chaque analyse ouvre le sujet associé.
+• Vocabulaire : glossaire des termes du programme, lu dans le fichier « vocabulaire.txt » (« Terme : définition », une entrée par ligne). Recherche par mot (aussi dans les définitions), et boutons Ajouter, Modifier, Supprimer ; le fichier peut aussi être complété à la main, puis rechargé (« Recharger », ou en revenant sur l'onglet). Le même fichier sert à l'interface web et au bot Telegram (/vocabulaire).
 
 Dates et groupes :
 • Une colonne dont toutes les valeurs sont des dates (JJ/MM/AAAA, AAAA-MM-JJ, avec ou sans heure hh:mm[:ss] ; les dates d'un fichier xlsx sont reconnues aussi) est de type « date » : elle est affichée « (date) » dans le tableau et traitée comme un repère de temps, non comme un nombre.
@@ -1083,6 +1170,8 @@ Analyses :
 • Test F : compare les variances de deux séries (avec le test de Levene, plus robuste) et indique s'il faut préférer le test t de Student ou celui de Welch.
 • ANOVA : un facteur, colonnes = groupes ou format long ; taille d'effet η², contrôle des résidus, tests de Levene et de Fligner-Killeen,
   ANOVA de Welch et Kruskal-Wallis en alternative ; comparaisons de Tukey si le test global est significatif (de Welch avec ajustement de Holm si les variances diffèrent).
+• ANOVA 2 facteurs : une colonne de mesures et deux colonnes de facteurs, avec ou sans interaction ; sommes des carrés ajustées (type III), taille d'effet η² partiel,
+  moyennes par niveau et par combinaison, graphiques des effets principaux et de l'interaction, contrôle des résidus, comparaisons de Tukey des facteurs significatifs (plan équilibré).
 • Khi² : trois tests, avec données brutes (deux colonnes de catégories) ou tableau d'effectifs déjà compté :
   – indépendance de deux variables ; homogénéité de plusieurs populations (même calcul, interprétation différente) ; effectifs observés et théoriques, résidus, V de Cramér,
     correction de Yates et test exact de Fisher pour un tableau 2 × 2 ou si les effectifs théoriques sont trop petits ;
@@ -1095,8 +1184,8 @@ Analyses :
   – référence en format long : une ligne par évaluation (réponse, évaluateur, échantillon, essai éventuel et référence de l'échantillon, comme dans une analyse de concordance Minitab) ; 
     les colonnes sont remises en forme automatiquement, sans modifier les données chargées, et le résultat est le même que dans le mode précédent.
   Interprétation selon l'échelle de Landis et Koch (1977) ; repères AIAG (MSA) pour les systèmes de mesure.
-• Cartes de contrôle aux attributs (Qualité) : carte p (proportion d'unités défectueuses) et carte u (défauts par unité), avec des effectifs d'inspection variables (limites variables) et, au choix, une colonne de phases ou un numéro de point à partir duquel commence la phase « Après » (limites calculées séparément dans chaque phase).
-• Graphiques : histogramme (courbe normale facultative), secteurs, barres, bulles, nuage de points (droite d'ajustement), valeurs individuelles, intervalles, boîtes à moustaches et diagramme de probabilité (normale ou autre loi) ; un graphique par groupe avec « Analyser par groupe ».
+• Cartes de contrôle aux attributs (Qualité) : carte p (proportion d'unités défectueuses), carte np (nombre d'unités défectueuses), carte c (nombre de défauts par unité de contrôle de taille constante) et carte u (défauts par unité), avec des effectifs d'inspection variables (limites variables, sauf carte c) et, au choix, une colonne de phases ou un numéro de point à partir duquel commence la phase « Après » (limites calculées séparément dans chaque phase).
+• Graphiques : histogramme (courbe normale facultative), secteurs, barres, bulles, nuage de points (droite d'ajustement), valeurs individuelles, intervalles, boîtes à moustaches et diagramme de probabilité (normale ou autre loi, avec limites de confiance ponctuelles au niveau 1 − α, comme Minitab ; la droite de Henry de l'onglet Normalité les porte aussi) ; un graphique par groupe avec « Analyser par groupe ».
 • Cartes de contrôle : X-barre/R, X-barre/S et valeurs individuelles/étendues mobiles (I-MR) ; le choix automatique retient I-MR pour des valeurs seules, X-barre/R de 2 à 7 valeurs
   par sous-groupe et X-barre/S à partir de 8. Données : une ligne par sous-groupe (une colonne par valeur) ou une colonne de mesures et une colonne qui désigne le sous-groupe ;
   des sous-groupes de tailles différentes donnent des limites variables. Limites calculées d'après les données (3 écarts-types), 8 tests de causes spéciales au choix (1 à 4 par défaut),
@@ -1105,6 +1194,7 @@ Analyses :
 • R&R, conventions de Minitab par défaut (à vérifier dans les résultats, qui les rappellent) :
   – croisée : pièces × opérateurs × répétitions, une ligne par mesure, plan équilibré ; méthode ANOVA, interaction retirée si sa p-value dépasse 0,05 (AIAG : 0,25), composantes de variance,
     % contribution, % variation d'étude (L = 6), % tolérance si la tolérance est donnée, nombre de catégories distinctes ; moins de 10 % acceptable, 10 à 30 % acceptable sous conditions, plus de 30 % inacceptable ;
+  – emboîtée : chaque pièce n'est mesurée que par un seul opérateur (essai destructif) ; pièces emboîtées dans les opérateurs, plan équilibré (même nombre de pièces par opérateur, même nombre de répétitions) ; mêmes indicateurs que la croisée, sans interaction ;
   – type 1 : une pièce étalon mesurée de nombreuses fois ; biais et test t, Cg et Cgk (K = 20 % de la tolérance, L = 6, seuil 1,33).
 
 Projet et rapport (onglet Rapport) :
@@ -1784,6 +1874,7 @@ class Application:
         self._onglet_estimation(g)
         self._onglet_f(g)
         self._onglet_anova(g)
+        self._onglet_anova2(g)
         self._onglet_khi2(g)
         g = self._groupe(nb, "Modélisation")
         self._onglet_correlation(g)
@@ -1798,6 +1889,7 @@ class Application:
         self._onglet_graphiques(nb)
         self._onglet_illustrations(nb)
         self._onglet_rapport(nb)
+        self._onglet_vocabulaire(nb)
         self._onglet_aide(nb)
 
     def _groupe(self, nb, titre):
@@ -1876,6 +1968,7 @@ class Application:
         ttk.Button(barre, text="Effacer la saisie", command=lambda: self.saisie.delete("1.0", "end")).pack(side="left", padx=6)
         ttk.Button(barre, text="Exporter en CSV…", command=self.exporter_csv).pack(side="left", padx=6)
         ttk.Button(barre, text="Générer des données…", command=self.generer_donnees).pack(side="left", padx=6)
+        self._bouton_illustration(barre, "Données").pack(side="left", padx=6)
 
         opt = ttk.LabelFrame(f, text="Lecture")
         opt.pack(fill="x", padx=8)
@@ -2187,6 +2280,7 @@ class Application:
         ttk.Button(projet, text="Enregistrer le projet…", command=self.enregistrer_projet).pack(side="left", padx=6, pady=6)
         ttk.Button(projet, text="Ouvrir un projet…", command=self.ouvrir_projet).pack(side="left", padx=6, pady=6)
         ttk.Label(projet, text="Les données, les résultats (texte, tableaux, graphiques) et les réglages des onglets sont conservés.").pack(side="left", padx=10)
+        self._bouton_illustration(projet, "Rapport").pack(side="right", padx=6, pady=6)
 
         rap = ttk.LabelFrame(f, text="Rapport de synthèse PDF")
         rap.pack(fill="both", expand=True, padx=8, pady=(0, 8))
@@ -2725,14 +2819,16 @@ class Application:
 
     def _onglet_cartes_attributs(self, nb):
         champs = [
-            {"id": "type", "lib": "Type de carte", "type": "choix", "opts": [("Carte p — proportion d'unités défectueuses", "p"), ("Carte u — défauts par unité", "u")]},
-            {"id": "defauts", "lib": "Colonne des comptages", "type": "col", "aide": "unités défectueuses (carte p) ou nombre de défauts (carte u) de chaque échantillon"},
-            {"id": "effectif", "lib": "Colonne des effectifs", "type": "col", "option": True, "aide": "taille de chaque échantillon (ou nombre d'unités contrôlées) ; sinon, effectif constant ci-dessous"},
-            {"id": "n", "lib": "Effectif constant", "type": "num", "option": True, "aide": "utilisé si aucune colonne d'effectifs n'est choisie"},
+            {"id": "type", "lib": "Type de carte", "type": "choix", "opts": [("Carte p — proportion d'unités défectueuses", "p"), ("Carte np — nombre d'unités défectueuses", "np"),
+                                                                              ("Carte c — nombre de défauts par unité de contrôle", "c"), ("Carte u — défauts par unité", "u")]},
+            {"id": "defauts", "lib": "Colonne des comptages", "type": "col", "aide": "unités défectueuses (cartes p et np) ou nombre de défauts (cartes c et u) de chaque échantillon"},
+            {"id": "effectif", "lib": "Colonne des effectifs", "type": "col", "option": True, "si": lambda v: v.get("type") != "c",
+             "aide": "taille de chaque échantillon (ou nombre d'unités contrôlées) ; sinon, effectif constant ci-dessous. Carte c : aucun effectif (unités de taille constante)"},
+            {"id": "n", "lib": "Effectif constant", "type": "num", "option": True, "si": lambda v: v.get("type") != "c", "aide": "utilisé si aucune colonne d'effectifs n'est choisie"},
             {"id": "ordre", "lib": "Ordre des données", "type": "col", "cols": "ordre", "option": True, "aide": "colonne de dates ou de numéros d'ordre (sinon : ordre du tableau)"},
             {"id": "phase", "lib": "Phases (avant / après)", "type": "col", "cols": "all", "option": True, "aide": "colonne qui désigne la phase de chaque ligne : limites calculées séparément"},
             {"id": "rupture", "lib": "ou « Après » à partir du point n°", "type": "num", "option": True, "aide": "sans colonne de phases"}]
-        self.z_attr, _ = self._onglet_decl(nb, "Cartes p et u", "att", champs, "carte_attributs", fixes={"tests": [1, 2, 3, 4]})
+        self.z_attr, _ = self._onglet_decl(nb, "Cartes d'attributs", "att", champs, "carte_attributs", fixes={"tests": [1, 2, 3, 4]})
 
     TYPES_GRAPH = [("Histogramme", "histogramme"), ("Secteurs (camembert)", "secteurs"), ("Barres", "barres"), ("Bulles", "bulles"),
                    ("Nuage de points", "nuage"), ("Valeurs individuelles", "individuelles"), ("Intervalles", "intervalles"),
@@ -2851,6 +2947,15 @@ class Application:
         else:
             v, g = self.v_aval.get(), self.v_agrp.get()
             self.lancer(self.z_anova, lambda: self.etude.anova("long", valeur=v, groupe=g))
+
+    def _onglet_anova2(self, nb):
+        champs = [
+            {"id": "valeur", "lib": "Réponse (mesures)", "type": "col"},
+            {"id": "facteur_a", "lib": "Facteur A", "type": "col", "cols": "all", "aide": "colonne de catégories (texte ou numéros de niveaux)"},
+            {"id": "facteur_b", "lib": "Facteur B", "type": "col", "cols": "all", "aide": "colonne de catégories, différente du facteur A"},
+            {"id": "interaction", "lib": "Interaction A × B", "type": "case", "defaut": True, "aide": "à retirer s'il n'y a qu'une mesure par combinaison"}]
+        self.z_anova2, _ = self._onglet_decl(nb, "ANOVA 2 facteurs", "an2", champs, "anova2",
+                                             aide="Une ligne par mesure, avec une colonne pour chaque facteur. Sommes des carrés ajustées (type III) ; comparaisons de Tukey pour les facteurs significatifs si le plan est équilibré.")
 
     # --- Test F
     def _onglet_f(self, nb):
@@ -3078,7 +3183,8 @@ class Application:
         self.v_r1k, self.v_r1l = tk.StringVar(value="20"), tk.StringVar(value="6")
         self.v_rcp, self.v_rco, self.v_rcm = tk.StringVar(), tk.StringVar(), tk.StringVar()
         self.v_rctol, self.v_rcl, self.v_rca = tk.StringVar(), tk.StringVar(value="6"), tk.StringVar(value="0,05")
-        ttk.Radiobutton(c, text="R&R croisée : pièces × opérateurs × répétitions (une ligne par mesure)", variable=self.v_rrmode, value="croisee").grid(row=0, column=0, columnspan=4, sticky="w")
+        ttk.Radiobutton(c, text="R&R croisée : chaque opérateur mesure toutes les pièces", variable=self.v_rrmode, value="croisee").grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Radiobutton(c, text="R&R emboîtée : chaque pièce n'est mesurée que par un opérateur (essai destructif)", variable=self.v_rrmode, value="emboitee").grid(row=0, column=2, columnspan=2, sticky="w", padx=(16, 0))
         for i, (lib, var, attr) in enumerate([("Pièces", self.v_rcp, "cb_rcp"), ("Opérateurs", self.v_rco, "cb_rco"), ("Mesures", self.v_rcm, "cb_rcm")]):
             ttk.Label(c, text=lib).grid(row=1 + i, column=0, sticky="e", padx=(20, 4), pady=3)
             cb = self._combo(c, var)
@@ -3088,7 +3194,7 @@ class Application:
         ttk.Entry(c, textvariable=self.v_rctol, width=12).grid(row=1, column=3, sticky="w")
         ttk.Label(c, text="L (écarts-types de la variation d'étude)").grid(row=2, column=2, sticky="e", padx=(16, 4))
         ttk.Entry(c, textvariable=self.v_rcl, width=12).grid(row=2, column=3, sticky="w")
-        ttk.Label(c, text="Seuil de l'interaction").grid(row=3, column=2, sticky="e", padx=(16, 4))
+        ttk.Label(c, text="Seuil de l'interaction (croisée)").grid(row=3, column=2, sticky="e", padx=(16, 4))
         ttk.Entry(c, textvariable=self.v_rca, width=12).grid(row=3, column=3, sticky="w")
         ttk.Radiobutton(c, text="R&R de type 1 : une seule pièce étalon mesurée de nombreuses fois", variable=self.v_rrmode, value="type1").grid(row=4, column=0, columnspan=4, sticky="w", pady=(10, 0))
         ttk.Label(c, text="Mesures").grid(row=5, column=0, sticky="e", padx=(20, 4), pady=3)
@@ -3103,7 +3209,8 @@ class Application:
         ttk.Label(c, text="L (écarts-types)").grid(row=7, column=2, sticky="e", padx=(16, 4))
         ttk.Entry(c, textvariable=self.v_r1l, width=12).grid(row=7, column=3, sticky="w")
         ttk.Label(c, text="Valeurs par défaut : conventions de Minitab (méthode ANOVA, L = 6, interaction retirée au seuil 0,05 ; type 1 : K = 20 %, L = 6, Cg et Cgk ≥ 1,33).\n"
-                          "La norme AIAG retient 0,25 pour le seuil de l'interaction. La tolérance est l'écart entre les limites de spécification.",
+                          "La norme AIAG retient 0,25 pour le seuil de l'interaction. La tolérance est l'écart entre les limites de spécification.\n"
+                          "R&R croisée et emboîtée : une ligne par mesure, avec les colonnes Pièces, Opérateurs et Mesures ; plan équilibré. En R&R emboîtée, une même pièce ne figure que chez un seul opérateur.",
                   foreground="#555555", justify="left").grid(row=8, column=0, columnspan=4, sticky="w", padx=20, pady=(8, 0))
         ttk.Button(c, text="Calculer", command=self.run_rr).grid(row=9, column=1, sticky="w", pady=8)
         self.z_rr = self._nouvelle_zone(f, "R&R")
@@ -3117,9 +3224,10 @@ class Application:
                 cmd = "rr1"
             else:
                 params = {"piece": self.v_rcp.get(), "operateur": self.v_rco.get(), "mesure": self.v_rcm.get(),
-                          "tolerance": lire_nombre(self.v_rctol.get(), "la tolérance"), "l": lire_nombre(self.v_rcl.get(), "L"),
-                          "alpha": lire_nombre(self.v_rca.get(), "le seuil de l'interaction")}
-                cmd = "rr_croisee"
+                          "tolerance": lire_nombre(self.v_rctol.get(), "la tolérance"), "l": lire_nombre(self.v_rcl.get(), "L")}
+                cmd = "rr_emboitee" if self.v_rrmode.get() == "emboitee" else "rr_croisee"
+                if cmd == "rr_croisee":
+                    params["alpha"] = lire_nombre(self.v_rca.get(), "le seuil de l'interaction")
         except ErreurStat as e:
             self.z_rr.afficher_erreur(str(e))
             return
@@ -3273,6 +3381,10 @@ class Application:
             return
         self._maj_liste_illustrations(garder=sel[0])
 
+    def _bouton_illustration(self, parent, nom):
+        """Bouton « Illustration… » d'un onglet qui n'a pas de zone de résultats (Données, Rapport) ; à placer avec pack."""
+        return self.ttk.Button(parent, text="Illustration…", command=lambda: self.ouvrir_illustration(ILLUSTRATION_ONGLET[nom]))
+
     def ouvrir_illustration(self, cle):
         """Affiche le sujet donné dans l'onglet Illustrations."""
         for i, (c, _) in enumerate(ILLUSTRATIONS):
@@ -3283,6 +3395,192 @@ class Application:
                 self.lb_illus.see(i)
                 self._maj_liste_illustrations(garder=i)
                 return
+
+    # --- Vocabulaire
+    def _onglet_vocabulaire(self, nb):
+        tk, ttk = self.tk, self.ttk
+        from tkinter import font as tkfont
+        f = self._onglet(nb, "Vocabulaire")
+        self._vocab, self._vocab_vus, self._vocab_mtime = [], [], None
+        haut = ttk.Frame(f)
+        haut.pack(fill="x", padx=8, pady=(8, 2))
+        self.v_vocab_q = tk.StringVar()
+        self.v_vocab_def = tk.BooleanVar(value=True)
+        self.v_vocab_nb = tk.StringVar()
+        ttk.Label(haut, text="Rechercher").pack(side="left")
+        e = ttk.Entry(haut, textvariable=self.v_vocab_q, width=32)
+        e.pack(side="left", padx=6)
+        ttk.Checkbutton(haut, text="aussi dans les définitions", variable=self.v_vocab_def, command=self._filtrer_vocabulaire).pack(side="left", padx=6)
+        ttk.Label(haut, textvariable=self.v_vocab_nb, foreground="#555555").pack(side="left", padx=10)
+        self.v_vocab_q.trace_add("write", lambda *_: self._filtrer_vocabulaire())
+        corps = ttk.PanedWindow(f, orient="horizontal")
+        corps.pack(fill="both", expand=True, padx=8, pady=4)
+        gauche = ttk.Frame(corps)
+        self.lb_vocab = tk.Listbox(gauche, exportselection=False, width=40, activestyle="none")
+        sy = ttk.Scrollbar(gauche, orient="vertical", command=self.lb_vocab.yview)
+        self.lb_vocab.configure(yscrollcommand=sy.set)
+        sy.pack(side="right", fill="y")
+        self.lb_vocab.pack(side="left", fill="both", expand=True)
+        self.lb_vocab.bind("<<ListboxSelect>>", lambda e: self._afficher_terme())
+        self.lb_vocab.bind("<Double-Button-1>", lambda e: self._editer_terme(self._terme_choisi()))
+        droite = ttk.Frame(corps)
+        base = tkfont.nametofont("TkDefaultFont")
+        self.tx_vocab = tk.Text(droite, wrap="word", padx=12, pady=10, background="white", relief="solid", borderwidth=1, font=base, state="disabled", width=60)
+        sy2 = ttk.Scrollbar(droite, orient="vertical", command=self.tx_vocab.yview)
+        self.tx_vocab.configure(yscrollcommand=sy2.set)
+        sy2.pack(side="right", fill="y")
+        self.tx_vocab.pack(side="left", fill="both", expand=True)
+        gras = base.copy()
+        gras.configure(weight="bold", size=base.cget("size") + 3)
+        self.tx_vocab.tag_configure("terme", font=gras, spacing3=8)
+        corps.add(gauche, weight=1)
+        corps.add(droite, weight=3)
+        bas = ttk.Frame(f)
+        bas.pack(fill="x", padx=8, pady=(2, 8))
+        for lib, cmd in (("Ajouter…", lambda: self._editer_terme(None)), ("Modifier…", lambda: self._editer_terme(self._terme_choisi())),
+                         ("Supprimer", self._supprimer_terme), ("Recharger", lambda: self._charger_vocabulaire(True)),
+                         ("Ouvrir le fichier…", self._ouvrir_fichier_vocabulaire)):
+            ttk.Button(bas, text=lib, command=cmd).pack(side="left", padx=(0, 6))
+        ttk.Label(bas, foreground="#555555", text=f"Fichier : {FICHIER_VOCABULAIRE.name} (dossier du programme) — « Terme : définition », une entrée par ligne.").pack(side="left", padx=8)
+        self.nb.bind("<<NotebookTabChanged>>", lambda e: self._vocabulaire_modifie(), add="+")
+        self._charger_vocabulaire()
+
+    def _mtime_vocabulaire(self):
+        try:
+            return FICHIER_VOCABULAIRE.stat().st_mtime
+        except OSError:
+            return None
+
+    def _vocabulaire_modifie(self):
+        """Relit le fichier si on l'a modifié à la main depuis la dernière lecture (appelé à l'affichage de l'onglet)."""
+        try:
+            if self.nb.tab(self.nb.select(), "text") == "Vocabulaire" and self._mtime_vocabulaire() != self._vocab_mtime:
+                self._charger_vocabulaire()
+        except Exception:
+            pass
+
+    def _charger_vocabulaire(self, message=False):
+        self._vocab = lire_vocabulaire()
+        self._vocab_mtime = self._mtime_vocabulaire()
+        self._filtrer_vocabulaire()
+        if message:
+            self.statut(f"Vocabulaire rechargé : {len(self._vocab)} terme(s).")
+
+    def _filtrer_vocabulaire(self, garder=None):
+        q = self.v_vocab_q.get()
+        self._vocab_vus = chercher_vocabulaire(self._vocab, q, self.v_vocab_def.get())
+        self.lb_vocab.delete(0, "end")
+        for terme, _ in self._vocab_vus:
+            self.lb_vocab.insert("end", terme)
+        self.v_vocab_nb.set(f"{len(self._vocab_vus)} terme(s)" + (f" sur {len(self._vocab)}" if q.strip() else ""))
+        i = 0
+        if garder:
+            i = next((k for k, (t, _) in enumerate(self._vocab_vus) if t == garder), 0)
+        if self._vocab_vus:
+            self.lb_vocab.selection_set(i)
+            self.lb_vocab.see(i)
+        self._afficher_terme()
+
+    def _terme_choisi(self):
+        sel = self.lb_vocab.curselection()
+        return self._vocab_vus[sel[0]] if sel else None
+
+    def _afficher_terme(self):
+        e = self._terme_choisi()
+        self.tx_vocab.configure(state="normal")
+        self.tx_vocab.delete("1.0", "end")
+        if e:
+            self.tx_vocab.insert("end", e[0] + "\n", "terme")
+            self.tx_vocab.insert("end", e[1])
+        elif not self._vocab:
+            self.tx_vocab.insert("end", f"Aucun terme : le fichier « {FICHIER_VOCABULAIRE.name} » est absent ou vide.\nUtiliser « Ajouter… » pour le créer.")
+        else:
+            self.tx_vocab.insert("end", "Aucun terme ne correspond à la recherche.")
+        self.tx_vocab.configure(state="disabled")
+
+    def _editer_terme(self, entree):
+        """Fenêtre d'ajout (entree = None) ou de modification d'un terme ; l'enregistrement réécrit le fichier."""
+        tk, ttk = self.tk, self.ttk
+        from tkinter import messagebox
+        win = tk.Toplevel(self.root)
+        win.title(f"{TITRE} — " + ("modifier un terme" if entree else "ajouter un terme"))
+        win.transient(self.root)
+        cadre = ttk.Frame(win, padding=12)
+        cadre.pack(fill="both", expand=True)
+        v_terme = tk.StringVar(value=entree[0] if entree else "")
+        ttk.Label(cadre, text="Terme").grid(row=0, column=0, sticky="ne", padx=4, pady=4)
+        ttk.Entry(cadre, textvariable=v_terme, width=60).grid(row=0, column=1, sticky="we", pady=4)
+        ttk.Label(cadre, text="Définition").grid(row=1, column=0, sticky="ne", padx=4, pady=4)
+        tx = tk.Text(cadre, wrap="word", width=70, height=12, padx=6, pady=4, relief="solid", borderwidth=1)
+        tx.grid(row=1, column=1, sticky="nsew", pady=4)
+        if entree:
+            tx.insert("1.0", entree[1])
+        cadre.columnconfigure(1, weight=1)
+        cadre.rowconfigure(1, weight=1)
+        ttk.Label(cadre, foreground="#555555", text="Un retour à la ligne dans la définition crée un nouveau paragraphe.").grid(row=2, column=1, sticky="w")
+
+        def enregistrer():
+            terme = " ".join(v_terme.get().split())
+            definition = tx.get("1.0", "end").strip()
+            if not terme or not definition:
+                messagebox.showwarning(TITRE, "Saisir le terme et sa définition.", parent=win)
+                return
+            if ":" in terme:
+                messagebox.showwarning(TITRE, "Le terme ne doit pas contenir de deux-points (« : » sépare le terme de sa définition).", parent=win)
+                return
+            autres = [e for e in self._vocab if not entree or e[0] != entree[0]]
+            if any(cle_tri_texte(e[0]) == cle_tri_texte(terme) for e in autres):
+                messagebox.showwarning(TITRE, f"Le terme « {terme} » existe déjà : le modifier plutôt que l'ajouter.", parent=win)
+                return
+            try:
+                ecrire_vocabulaire(autres + [(terme, definition)])
+            except OSError as e:
+                messagebox.showerror(TITRE, f"Enregistrement impossible : {e}", parent=win)
+                return
+            win.destroy()
+            self.v_vocab_q.set("")
+            self._charger_vocabulaire()
+            self._filtrer_vocabulaire(garder=terme)
+            self.statut(f"Terme « {terme} » enregistré dans {FICHIER_VOCABULAIRE.name}.")
+
+        barre = ttk.Frame(cadre)
+        barre.grid(row=3, column=0, columnspan=2, sticky="e", pady=(10, 0))
+        for i, (lib, cmd) in enumerate((("Enregistrer", enregistrer), ("Annuler", win.destroy))):
+            tk.Button(barre, text=lib, command=cmd, padx=14, pady=3, default="active" if i == 0 else "normal").pack(side="left", padx=4)
+        _placer_fenetre(win, self.root, 640)
+        win.update()
+        try:
+            win.grab_set()
+        except Exception:
+            pass
+
+    def _supprimer_terme(self):
+        from tkinter import messagebox
+        e = self._terme_choisi()
+        if not e:
+            return
+        if not messagebox.askyesno(TITRE, f"Supprimer le terme « {e[0]} » du vocabulaire ?", parent=self.root):
+            return
+        try:
+            ecrire_vocabulaire([x for x in self._vocab if x[0] != e[0]])
+        except OSError as err:
+            messagebox.showerror(TITRE, f"Suppression impossible : {err}", parent=self.root)
+            return
+        self._charger_vocabulaire()
+
+    def _ouvrir_fichier_vocabulaire(self):
+        from tkinter import messagebox
+        if not FICHIER_VOCABULAIRE.exists():
+            try:
+                ecrire_vocabulaire([])
+            except OSError as err:
+                messagebox.showerror(TITRE, f"Fichier impossible à créer : {err}", parent=self.root)
+                return
+        try:
+            subprocess.Popen(["xdg-open", str(FICHIER_VOCABULAIRE)])
+            self.statut("Fichier ouvert dans l'éditeur : après modification, « Recharger » (ou revenir sur cet onglet).")
+        except OSError:
+            messagebox.showinfo(TITRE, f"Ouvrir le fichier à la main :\n{FICHIER_VOCABULAIRE}", parent=self.root)
 
     def _onglet_aide(self, nb):
         tk = self.tk
