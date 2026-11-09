@@ -6,12 +6,15 @@
 Aléarisation : Fait de réaliser les essais d’un plan d’expérience dans un ordre aléatoire.
   La répartition aléatoire évite que l’effet d’une variable masquée soit attribué à tort à un autre facteur ou cache les effets réels des facteurs testés.
 Attribut : voir données discrètes « attributs ».
-Capabilité : Aptitude d’un processus à fournir des produits (ou service) conformément aux attentes des clients. Indices (court terme : Cpk, long terme : Ppk) obtenus en calculant le rapport entre la tolérance (ce que souhaite le client) et la dispersion du processus (6 écart-types : ce que le processus actuel est réellement capable de fournir).
+Capabilité : Aptitude d’un processus à fournir des produits (ou service) conformément aux attentes des clients.
+  Indices (court terme : Cpk, long terme : Ppk) obtenus en calculant le rapport entre la tolérance (ce que souhaite le client) et la dispersion du processus (6 écart-types : ce que le processus actuel est réellement capable de fournir).
 Carte C : carte de contrôle qui présente le nombre de défauts par échantillon
 Carte de contrôle : Représentation graphique des performances d’une caractéristique dans le temps, relativement à ses limites naturelles (limites de contrôle) et à sa tendance centrale (moyenne).
 Carte P : carte de contrôle utilisée pour tracer le pourcentage d’éléments défectueux dans un échantillon
 Carte R : carte de contrôle qui trace l’étendue d’un échantillon (ou d’un sous-groupe)
-Carte X-barre / R : carte de contrôle double représentant la variation d’un processus dans le temps. Ces cartes ne peuvent être utilisées qu’avec des données collectées en sous-groupe rationnels. La carte X-barre présente la variation au niveau de la moyenne (variation entre les moyennes des sous-groupes). La carte R présente la variabilité du processus (variation à l’intérieur des sous-groupes).
+Carte X-barre / R : carte de contrôle double représentant la variation d’un processus dans le temps. Ces cartes ne peuvent être utilisées qu’avec des données collectées en sous-groupe rationnels.
+  La carte X-barre présente la variation au niveau de la moyenne (variation entre les moyennes des sous-groupes).
+  La carte R présente la variabilité du processus (variation à l’intérieur des sous-groupes).
 Cause : Ce qui produit un effet ou entraîne une modification.
 Cause aléatoire ou commune : Source de variation naturelle et inhérente à un processus
 Cause assignable ou spéciale : Source de variation non naturelle du processus. Les causes spéciales de variation entrainent généralement des variations significatives et importantes du processus. Elles se manifestent et disparaissent de façon sporadique. Elles peuvent être temporaires ou de longues durées. Leur présence se manifeste sur les cartes de contrôles en appliquant les règles de Shewart.
@@ -64,7 +67,8 @@ Hypothèse alternative (Ha ou H1) : Dans un test d’hypothèse, l’hypothèse 
   Cette hypothèse est supposée vraie dès lors que l’hypothèse nulle est rejetée.
 Hypothèse nulle (Ho) : Dans un test d’hypothèse, l’hypothèse nulle est l’hypothèse d’égalité (égalité des moyennes, des variances ou des proportions).
   Cette hypothèse est supposée vraie tant que les preuves statistiques du contraire n’ont pas été apportées.
-Intervalle de confiance (I.C.) et niveau de confiance (α) : Intervalle de valeurs d’une variable quantitative dont la probabilité (niveau de confiance, α) est forte (par exemple 95%). L’intervalle est « Bilatéral » s’il est symétrique (les probabilités des intervalles à gauche et à droite de l’I.C. sont égales à α/2), « unilatéral » s’il est « cadré » à gauche ou à droite de l’étendue des valeurs.
+Intervalle de confiance (I.C.) et niveau de confiance (α) : Intervalle de valeurs d’une variable quantitative dont la probabilité (niveau de confiance, α) est forte (par exemple 95%).
+  L’intervalle est « Bilatéral » s’il est symétrique (les probabilités des intervalles à gauche et à droite de l’I.C. sont égales à α/2), « unilatéral » s’il est « cadré » à gauche ou à droite de l’étendue des valeurs.
 Limites de contrôle : Lignes horizontales tracées (en rouge avec Minitab) sur une carte de contrôle en vue de représenter les limites inférieures (Lower Control Limit) et supérieures (Upper Control Limit) de variation naturelle du processus. Elles représentent ce que le processus actuel est capable de faire (+/- 3σ).
 Limites de spécifications : (Lower Spec Limit – Upper Spec Limit) Limites imposées par le client et précisant ce qui est acceptable de ce qui ne l’est pas (souvent appelées tolérances). Elles représentent ce que le processus devrait être capable de faire. Elles sont totalement différentes, par nature, des limites de contrôle.
 Limites de surveillance : Limites tracées sur un diagrammes chronologiques (souvent au 2/3 de la tolérance) servant à indiquer à l’opérateur qu’une action est nécessaire. Elles sont totalement différentes, par nature, des limites de contrôle.
@@ -97,7 +101,8 @@ Reproductibilité : Aptitude d’un système de mesure à donner des valeurs pro
 Sigma : Lettre de l’alphabet grec (σ), s’utilise pour désigner l’écart-type d’une population.
 SIPOC : Supplier, Input, Process, Output, Customer – outil utilisé par l’équipe projet en phase « Définir » pour déterminer le périmètre du projet, les sorties et les clients du processus.
 Sondage, n-échantillon, base de sondage, taux de sondage : Un sondage est le recueil des valeurs d’une partie (l’échantillon) d’effectif n (d’où l’expression n-échantillon) de la population (dite base de sondage). Le taux de sondage est le rapport n/N.
-Sous-groupe : Regroupement logique d’objets ou d’évènements qui présente seulement des variations aléatoires d’un événement à l’autre. Par exemple, les objets ou les évènements sont regroupés pour créer des groupes homogènes (on parle alors de sous-groupes rationnels) sans aucune cause spéciale.
+Sous-groupe : Regroupement logique d’objets ou d’évènements qui présente seulement des variations aléatoires d’un événement à l’autre.
+  Par exemple, les objets ou les évènements sont regroupés pour créer des groupes homogènes (on parle alors de sous-groupes rationnels) sans aucune cause spéciale.
 SPC : Statistical Process Control (voir MSP).
 Statistique descriptive : Ensemble des techniques du statisticien pour décrire, numériquement, graphiquement, les populations.
 Statistique inférentielle : ou encore inductive, elle consiste à induire des résultats sur une population à partir d’un échantillon en précisant si possible la marge d’erreur (donc en faisant appel au calcul des probabilités).
