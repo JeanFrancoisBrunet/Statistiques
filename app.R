@@ -214,6 +214,18 @@ DECL <- list(
     fc("ratio0", "Rapport de référence λ₁ / λ₂ (1 = taux égaux)", "num", defaut = 1, si = "v$mode == '2'"),
     fc("alternative", "Hypothèse alternative", "choix", opts = ALT3)),
     aide = "Tests exacts de Poisson : nombre d'événements par observation (durée, surface, lot…)."),
+  puissance = list(titre = "Puissance", commande = "puissance", libre = "TRUE", champs = list(
+    fc("test", "Test", "choix", opts = c("t à 1 échantillon" = "t1", "t apparié" = "tpaire", "t à 2 échantillons" = "t2", "z à 1 échantillon (σ connu)" = "z1",
+                                        "1 proportion (binomiale exacte)" = "p1", "2 proportions" = "p2", "ANOVA à 1 facteur" = "anova")),
+    fc("alternative", "Hypothèse alternative", "choix", opts = ALT3, si = "v$test != 'anova'"),
+    fc("n", "Taille d'échantillon (par groupe) — vide pour la calculer", "num", option = TRUE),
+    fc("difference", "Différence à détecter — vide pour la calculer", "num", option = TRUE),
+    fc("puissance", "Puissance (0 à 1, ou en %) — vide pour la calculer", "num", option = TRUE),
+    fc("ecart_type", "Écart-type supposé", "num", option = TRUE, si = "v$test == 't1' || v$test == 'tpaire' || v$test == 't2' || v$test == 'z1' || v$test == 'anova'"),
+    fc("p0", "Proportion de référence", "num", option = TRUE, si = "v$test == 'p1' || v$test == 'p2'"),
+    fc("k", "Nombre de niveaux du facteur", "num", defaut = 3, si = "v$test == 'anova'"),
+    fc("n_courbe", "Tailles à tracer sur la courbe (facultatif, séparées par des espaces)", "texte", option = TRUE)),
+    aide = "Exactement une des trois cases « taille d'échantillon », « différence » et « puissance » doit rester vide : elle est calculée à partir des deux autres, et la courbe de puissance est tracée. ANOVA : différence = écart maximal entre deux moyennes ; proportions : différence = proportion réelle − proportion de référence."),
   estim = list(titre = "Estimation", commande = "estimation", libre = "v$source == 'resume'", champs = list(
     fc("source", "Données", "choix", opts = c("Colonne de données" = "col", "Résumé saisi (n, moyenne, écart-type)" = "resume")),
     fc("x", "Série", "col", si = "v$source == 'col'"),
@@ -284,6 +296,7 @@ champ_ui <- function(pref, ch) {
     cols = selectInput(id, ch$lib, choices = NULL, multiple = TRUE),
     liste = selectInput(id, ch$lib, choices = ch$opts, selected = unname(ch$opts), multiple = TRUE),
     num = numericInput(id, ch$lib, value = if (is.null(ch$defaut)) NA_real_ else ch$defaut),
+    texte = textInput(id, ch$lib, value = if (is.null(ch$defaut)) "" else ch$defaut),
     case = checkboxInput(id, ch$lib, value = isTRUE(ch$defaut)))
   if (!is.null(ch$si)) conditionalPanel(si_js(ch$si, pref), w) else w
 }
@@ -418,6 +431,7 @@ ui <- fluidPage(
           ),
           decl_tab("z"),
           decl_tab("poisson"),
+          decl_tab("puissance"),
           decl_tab("estim"),
           tabPanel("Test F", br(),
             p("Compare les variances de deux séries ; le résultat indique aussi s'il faut préférer le test t de Student ou celui de Welch."),
@@ -832,6 +846,7 @@ server <- function(input, output, session) {
       x <- v[[ch$id]]; i <- ch$id
       if (ch$type == "choix") p[[i]] <- x
       else if (ch$type == "case") p[[i]] <- isTRUE(x)
+      else if (ch$type == "texte") p[[i]] <- if (is.null(x)) "" else trimws(as.character(x))
       else if (ch$type == "col") {
         if (is.null(x) || !nzchar(x)) { if (!isTRUE(ch$option)) stop(sprintf("Choisir : %s.", ch$lib)); p[i] <- list(NULL) } else p[[i]] <- x
       } else if (ch$type == "num") {

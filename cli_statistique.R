@@ -658,7 +658,7 @@ lancer_commande <- function(d, p) {
          anova = cmd_anova(d, p), capabilite = cmd_capabilite(d, p), kappa = cmd_kappa(d, p),
          ftest = avancee("cmd_ftest", d, p), khi2 = avancee("cmd_khi2", d, p),
          carte = avancee("cmd_carte", d, p), rr1 = avancee("cmd_rr1", d, p),
-         rr_croisee = avancee("cmd_rr_croisee", d, p), rr_emboitee = avancee("cmd_rr_emboitee", d, p), anova2 = avancee("cmd_anova2", d, p), generer = avancee("cmd_generer", d, p),
+         rr_croisee = avancee("cmd_rr_croisee", d, p), rr_emboitee = avancee("cmd_rr_emboitee", d, p), anova2 = avancee("cmd_anova2", d, p), generer = avancee("cmd_generer", d, p), puissance = avancee("cmd_puissance", d, p),
          z = avancee("cmd_z", d, p), poisson = avancee("cmd_poisson", d, p), estimation = avancee("cmd_estimation", d, p),
          identification = avancee("cmd_identification", d, p), correlation = avancee("cmd_correlation", d, p),
          regression = avancee("cmd_regression", d, p), carte_attributs = avancee("cmd_carte_attributs", d, p), graphique = avancee("cmd_graphique", d, p), serie = avancee("cmd_serie", d, p),

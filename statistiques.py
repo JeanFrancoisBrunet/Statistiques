@@ -162,7 +162,7 @@ ILLUSTRATIONS = [
 # thème proposé par le bouton « Illustration… » de chaque onglet d'analyse
 ILLUSTRATION_ONGLET = {"Descriptif": "stat_descriptive", "Normalité": "loi_normale", "Test t": "test_t_1", "Test Z": "test_z", "Khi²": "khi2",
                        "Identification de loi": "interpreter_distribution", "Graphiques": "boite_moustaches",
-                       "ANOVA": "tests_hypotheses", "ANOVA 2 facteurs": "tests_hypotheses", "R&R": "msa",
+                       "ANOVA": "tests_hypotheses", "ANOVA 2 facteurs": "tests_hypotheses", "Puissance": "risques_alpha_beta", "R&R": "msa",
                        "Cartes de contrôle": "carte_controle", "Cartes d'attributs": "carte_controle", "Données": "types_donnees", "Rapport": "demarche_6sigma"}
 
 
@@ -1871,6 +1871,7 @@ class Application:
         self._onglet_t(g)
         self._onglet_z(g)
         self._onglet_poisson(g)
+        self._onglet_puissance(g)
         self._onglet_estimation(g)
         self._onglet_f(g)
         self._onglet_anova(g)
@@ -2687,9 +2688,9 @@ class Application:
                         v.set(ch["defaut"])
                     w = ttk.Combobox(c, textvariable=v, state="readonly", width=34, values=[o[0] for o in ch["opts"]])
                     w.bind("<<ComboboxSelected>>", maj_visibilite)
-                elif ch["type"] == "num":
+                elif ch["type"] in ("num", "texte"):
                     v = tk.StringVar(value=str(ch.get("defaut", "")))
-                    w = ttk.Entry(c, textvariable=v, width=14)
+                    w = ttk.Entry(c, textvariable=v, width=14 if ch["type"] == "num" else 26)
                 else:                                                   # col
                     v = tk.StringVar()
                     w = ttk.Combobox(c, textvariable=v, state="readonly", width=26, values=[])
@@ -2740,6 +2741,8 @@ class Application:
                         raise ErreurStat(f"Choisir {ch['lib'].lower()}.")
                     val = None
                 params[i] = val
+            elif t == "texte":
+                params[i] = (cv[i] or "").strip()
             elif t == "num":
                 n = lire_nombre(cv[i], f"« {ch['lib']} »")
                 if n is None and not ch.get("option") and ch.get("defaut", "") == "":
@@ -2893,6 +2896,27 @@ class Application:
         def libre(p):
             return p.get("source") == "resume" and (p.get("mode") != "2" or p.get("source2") == "resume")
         self.z_poisson, _ = self._onglet_decl(nb, "Test de Poisson", "poi", champs, "poisson", libre=libre)
+
+    def _onglet_puissance(self, nb):
+        T = lambda *k: (lambda v: v["test"] in k)
+        champs = [
+            {"id": "test", "lib": "Test", "type": "choix", "opts": [
+                ("t à 1 échantillon", "t1"), ("t apparié", "tpaire"), ("t à 2 échantillons", "t2"), ("z à 1 échantillon (σ connu)", "z1"),
+                ("1 proportion (binomiale exacte)", "p1"), ("2 proportions", "p2"), ("ANOVA à 1 facteur", "anova")]},
+            {"id": "alternative", "lib": "Hypothèse alternative", "type": "choix", "opts": self.ALT3, "si": lambda v: v["test"] != "anova"},
+            {"id": "n", "lib": "Taille d'échantillon (par groupe)", "type": "num", "option": True,
+             "aide": "laisser vide pour la calculer"},
+            {"id": "difference", "lib": "Différence à détecter", "type": "num", "option": True,
+             "aide": "laisser vide pour la calculer (ANOVA : écart maximal entre deux moyennes ; proportions : proportion réelle − proportion de référence)"},
+            {"id": "puissance", "lib": "Puissance (0 à 1, ou en %)", "type": "num", "option": True, "aide": "laisser vide pour la calculer"},
+            {"id": "ecart_type", "lib": "Écart-type", "type": "num", "option": True, "si": T("t1", "tpaire", "t2", "z1", "anova"),
+             "aide": "écart-type supposé de la population (test apparié : des différences)"},
+            {"id": "p0", "lib": "Proportion de référence", "type": "num", "option": True, "si": T("p1", "p2")},
+            {"id": "k", "lib": "Nombre de niveaux du facteur", "type": "num", "option": True, "defaut": "3", "si": T("anova")},
+            {"id": "n_courbe", "lib": "Tailles à tracer sur la courbe", "type": "texte", "option": True,
+             "aide": "facultatif, séparées par des espaces (ex. 10 20 40) ; par défaut autour de la taille étudiée"}]
+        self.z_puissance, _ = self._onglet_decl(nb, "Puissance", "pui", champs, "puissance", libre=lambda p: True,
+                                                aide="Exactement une des trois cases « taille d'échantillon », « différence » et « puissance » doit rester vide : elle est calculée à partir des deux autres, et la courbe de puissance est tracée.")
 
     def _onglet_estimation(self, nb):
         champs = [

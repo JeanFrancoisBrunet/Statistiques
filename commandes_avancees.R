@@ -1893,3 +1893,125 @@ cmd_graphique <- function(d, p) {
   } else stop("Type de graphique inconnu.", call. = FALSE)
   list(titre = titre, lignes = lignes, conclusion = lignes[1], tables = tabs, figures = figs, avertissements = avert)
 }
+
+# ---- Puissance et taille d'échantillon (à la manière de Minitab) -----------------
+# Exactement une des trois grandeurs « taille d'échantillon », « différence » ou « puissance » est laissée vide :
+# elle est calculée à partir des deux autres. Une courbe de puissance (puissance en fonction de la différence,
+# pour plusieurs tailles d'échantillon) est tracée.
+PUISSANCE_TESTS <- c(t1 = "test t à 1 échantillon", tpaire = "test t apparié", t2 = "test t à 2 échantillons",
+                     z1 = "test z à 1 échantillon (σ connu)", p1 = "test de 1 proportion (loi binomiale exacte)",
+                     p2 = "test de 2 proportions", anova = "ANOVA à 1 facteur")
+
+cmd_puissance <- function(d, p) {
+  test <- as.character(p$test); if (!isTRUE(test %in% names(PUISSANCE_TESTS))) stop("Choisir le test à étudier.", call. = FALSE)
+  alt <- alt_lire(p$alternative); un <- alt != "two.sided"
+  if (test == "anova") { alt <- "two.sided"; un <- FALSE }
+  n <- num(p$n); dif <- num(p$difference); pu <- num(p$puissance)
+  if (!is.na(pu) && pu > 1) pu <- pu / 100
+  vides <- c(n = is.na(n), difference = is.na(dif), puissance = is.na(pu))
+  if (sum(vides) != 1) stop("Laisser vide exactement une des trois cases : taille d'échantillon, différence ou puissance (elle sera calculée).", call. = FALSE)
+  if (!is.na(pu) && (pu <= ALPHA || pu >= 1)) stop("La puissance doit être comprise entre le risque α et 1 (exclus).", call. = FALSE)
+  if (!is.na(dif) && dif == 0) stop("La différence à détecter doit être non nulle.", call. = FALSE)
+  nmin <- switch(test, p1 = 1, anova = 2, 2)
+  if (!is.na(n) && (n < nmin || abs(n - round(n)) > 1e-8)) stop(sprintf("La taille d'échantillon doit être un entier supérieur ou égal à %d.", nmin), call. = FALSE)
+  s <- num(p$ecart_type); p0 <- num(p$p0); k <- num(p$k)
+  if (test %in% c("t1", "tpaire", "t2", "z1", "anova")) val_pos(s, "L'écart-type")
+  if (test %in% c("p1", "p2")) { if (is.na(p0) || p0 <= 0 || p0 >= 1) stop("La proportion de référence doit être strictement comprise entre 0 et 1.", call. = FALSE) }
+  if (test == "anova") { if (is.na(k) || k < 2 || abs(k - round(k)) > 1e-8) stop("Le nombre de niveaux doit être un entier supérieur ou égal à 2.", call. = FALSE) }
+  # sens de la différence (proportions : p = p0 + différence ; pour « inférieur » la différence est négative)
+  sens <- if (alt == "less") -1 else 1
+  if (test %in% c("p1", "p2") && !is.na(dif)) {
+    dif <- sens * abs(dif) * (if (alt == "two.sided" && dif < 0) -1 else 1)
+    if (p0 + dif <= 0 || p0 + dif >= 1) stop("La proportion de référence + la différence doit rester strictement comprise entre 0 et 1.", call. = FALSE)
+  }
+  a <- ALPHA
+  tt <- c(t1 = "one.sample", tpaire = "paired", t2 = "two.sample")
+  pw <- function(n, dd) {                       # puissance pour n (vectorisé sur n pour p1) et une différence dd
+    ad <- abs(dd)
+    switch(test,
+      t1 = , tpaire = , t2 = vapply(n, function(m) stats::power.t.test(n = m, delta = ad, sd = s, sig.level = a, type = tt[[test]], alternative = if (un) "one.sided" else "two.sided")$power, 0),
+      z1 = { z <- ad * sqrt(n) / s; if (un) stats::pnorm(-stats::qnorm(1 - a) + z) else stats::pnorm(-stats::qnorm(1 - a / 2) + z) + stats::pnorm(-stats::qnorm(1 - a / 2) - z) },
+      p2 = vapply(n, function(m) stats::power.prop.test(n = m, p1 = p0, p2 = p0 + dd, sig.level = a, alternative = if (un) "one.sided" else "two.sided")$power, 0),
+      anova = { mu <- c(-ad / 2, ad / 2, rep(0, k - 2)); vapply(n, function(m) stats::power.anova.test(groups = k, n = m, between.var = stats::var(mu), within.var = s^2, sig.level = a)$power, 0) },
+      p1 = { pr <- p0 + dd
+        if (alt == "greater") { cu <- stats::qbinom(1 - a, n, p0) + 1; 1 - stats::pbinom(cu - 1, n, pr) }
+        else if (alt == "less") { x <- stats::qbinom(a, n, p0); cl <- ifelse(stats::pbinom(x, n, p0) <= a + 1e-12, x, x - 1); stats::pbinom(cl, n, pr) }
+        else { cu <- stats::qbinom(1 - a / 2, n, p0) + 1; x <- stats::qbinom(a / 2, n, p0); cl <- ifelse(stats::pbinom(x, n, p0) <= a / 2 + 1e-12, x, x - 1)
+               stats::pbinom(cl, n, pr) + 1 - stats::pbinom(cu - 1, n, pr) } })
+  }
+  dmax_p <- function() if (alt == "less") -(p0 - 1e-6) else (1 - p0 - 1e-6)
+  # résolution
+  if (vides[["puissance"]]) {
+    pu <- as.numeric(pw(n, dif))
+  } else if (vides[["n"]]) {
+    cible <- pu; dd <- dif
+    if (test == "p1") {
+      N <- 1:100000; pv <- pw(N, dd); i <- which(pv >= cible)
+      if (!length(i)) stop("La taille d'échantillon nécessaire dépasse 100 000 : la différence à détecter est trop petite.", call. = FALSE)
+      n <- N[i[1]]
+    } else {
+      hi <- max(nmin, 4); while (pw(hi, dd) < cible) { hi <- hi * 2; if (hi > 1e7) stop("La taille d'échantillon nécessaire dépasse 10 millions : la différence à détecter est trop petite.", call. = FALSE) }
+      lo <- nmin - 1
+      while (hi - lo > 1) { m <- (lo + hi) %/% 2; if (pw(m, dd) >= cible) hi <- m else lo <- m }
+      n <- hi
+    }
+    pu <- as.numeric(pw(n, dd))
+  } else {
+    cible <- pu
+    if (test %in% c("p1", "p2")) { lim <- dmax_p(); f <- function(x) as.numeric(pw(n, x)) - cible
+      if (f(lim) < 0) stop("Cette puissance est inatteignable avec cette taille d'échantillon.", call. = FALSE)
+      dif <- stats::uniroot(f, sort(c(sens * 1e-6, lim)), tol = 1e-10)$root
+    } else { f <- function(x) as.numeric(pw(n, x)) - cible; hi <- 50 * s
+      if (f(hi) < 0) stop("Cette puissance est inatteignable avec cette taille d'échantillon.", call. = FALSE)
+      dif <- stats::uniroot(f, c(1e-8 * s, hi), tol = 1e-10)$root }
+  }
+  ad <- abs(dif)
+  # tailles d'échantillon de la courbe
+  nc <- paste(as.character(p$n_courbe), collapse = " ")
+  ns <- suppressWarnings(as.numeric(strsplit(trimws(gsub("[;,]", " ", nc)), "[[:space:]]+")[[1]]))
+  ns <- ns[!is.na(ns) & ns >= nmin]; ns <- unique(round(ns))
+  if (!length(ns)) ns <- unique(pmax(nmin, round(n * c(0.5, 1, 1.5))))
+  ns <- sort(unique(c(ns)))
+  # texte
+  cote <- switch(alt, greater = "unilatéral (supérieur)", less = "unilatéral (inférieur)", "bilatéral")
+  eff <- if (test == "t2") sprintf("par groupe : %d", as.integer(n)) else sprintf("%d", as.integer(n))
+  diftxt <- switch(test, t1 = "Différence à détecter (écart entre la moyenne réelle et la valeur de référence)", tpaire = "Différence à détecter (moyenne des différences appariées)",
+                   t2 = "Différence à détecter entre les deux moyennes", z1 = "Différence à détecter (écart entre la moyenne réelle et la valeur de référence)",
+                   p1 = "Différence à détecter (proportion réelle − proportion de référence)", p2 = "Différence à détecter (proportion du groupe 2 − proportion de référence)",
+                   anova = "Différence à détecter (écart maximal entre deux moyennes)")
+  lignes <- c(sprintf("Analyse de puissance : %s", PUISSANCE_TESTS[[test]]),
+              sprintf("Risque α : %s ; test %s", fmt(a), cote))
+  if (test %in% c("t1", "tpaire", "t2", "z1", "anova")) lignes <- c(lignes, sprintf("Écart-type supposé : %s", fmt(s)))
+  if (test %in% c("p1", "p2")) lignes <- c(lignes, sprintf("Proportion de référence : %s", fmt(p0)))
+  if (test == "anova") lignes <- c(lignes, sprintf("Nombre de niveaux du facteur : %d", as.integer(k)))
+  lignes <- c(lignes, "",
+              sprintf("%s : %s", diftxt, fmt(dif)),
+              sprintf("Taille d'échantillon (%s)", eff),
+              sprintf("Puissance : %s (risque β = %s)", fmt(pu), fmt(1 - pu)))
+  if (test == "p1") {
+    ca <- if (alt == "greater") { cu <- stats::qbinom(1 - a, n, p0) + 1; 1 - stats::pbinom(cu - 1, n, p0) }
+          else if (alt == "less") { x <- stats::qbinom(a, n, p0); cl <- if (stats::pbinom(x, n, p0) <= a + 1e-12) x else x - 1; stats::pbinom(cl, n, p0) }
+          else { cu <- stats::qbinom(1 - a / 2, n, p0) + 1; x <- stats::qbinom(a / 2, n, p0); cl <- if (stats::pbinom(x, n, p0) <= a / 2 + 1e-12) x else x - 1; stats::pbinom(cl, n, p0) + 1 - stats::pbinom(cu - 1, n, p0) }
+    lignes <- c(lignes, sprintf("Risque α réellement atteint (loi binomiale discrète) : %s", fmt(ca)))
+  }
+  what <- if (vides[["n"]]) sprintf("Taille d'échantillon nécessaire : %d", as.integer(n)) else if (vides[["difference"]]) sprintf("Plus petite différence détectable : %s", fmt(ad)) else sprintf("Puissance obtenue : %s", fmt(pu))
+  lignes <- c(lignes, "", what)
+  # tableau : puissance pour chaque taille de la courbe à la différence étudiée
+  tab <- data.frame(Taille = ns, Difference = dif, Puissance = as.numeric(vapply(ns, function(m) pw(m, dif), 0)), stringsAsFactors = FALSE)
+  # figure
+  fig <- lire_png("puissance.png", largeur = 800, hauteur = 560)
+  par(mar = c(4.5, 4.8, 3.2, 1))
+  xmax <- if (test %in% c("p1", "p2")) min(2 * ad, abs(dmax_p())) else 2 * ad
+  xs <- seq(0, xmax, length.out = 200)[-1]
+  cols <- c("#1f6fb5", "#c0392b", "#2e8b57", "#8e44ad", "#d68910", "#555555")[seq_along(ns) %% 6 + 1]
+  plot(NA, xlim = c(0, xmax), ylim = c(0, 1), xlab = "Différence", ylab = "Puissance", main = "Courbe de puissance")
+  grid(col = "#e5e5e5")
+  for (i in seq_along(ns)) lines(xs, vapply(xs, function(x) as.numeric(pw(ns[i], sens * x)), 0), col = cols[i], lwd = 2)
+  abline(h = pu, lty = 2, col = "#888888"); abline(v = ad, lty = 3, col = "#888888")
+  abline(h = a, lty = 3, col = "#bbbbbb")
+  points(ad, pu, pch = 19, cex = 1.3)
+  legend("bottomright", bty = "n", lwd = 2, col = cols, cex = 0.85, title = if (test == "t2") "Taille par groupe" else "Taille d'échantillon", legend = ns)
+  invisible(dev.off())
+  list(titre = "Puissance et taille d'échantillon", lignes = lignes, conclusion = what, tables = list(Puissance = tab), tables_libres = "Puissance", figures = c(fig),
+       avertissements = list("La puissance est la probabilité de mettre en évidence une différence réelle de la taille indiquée. Elle dépend du risque α, de la dispersion (écart-type) et de la taille d'échantillon ; la courbe montre son évolution avec la différence."))
+}
