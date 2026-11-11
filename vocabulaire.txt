@@ -53,7 +53,8 @@ Effet : Ce qui a été produit par une cause.
 Effet d’un facteur : Influence de ce facteur (X) sur la variable de sortie (Y). Ecart observé entre les moyennes de Y lorsque X change de niveau.
 Erreur de type I (α) : Probabilité d’acceptation de l’hypothèse alternative alors qu’en réalité, c’est l’hypothèse nulle qui est vraie. Risque de conclure à tort, à une différence entre les échantillons.
 Erreur de type II (β) : Probabilité d’accepter l’hypothèse nulle alors qu’en réalité, c’est l’hypothèse alternative qui est vraie. Risque de ne pas voir la différence réelle entre les échantillons.
-Erreur résiduelle (ou erreur expérimentale) : Elle représente la variation de cause aléatoire présente lors de l’expérimentation. Il s’agit donc d’une quantité de variation qui ne peut pas être attribuée aux variables (X) incluses dans l’expérimentation.
+Erreur résiduelle (ou erreur expérimentale) : Elle représente la variation de cause aléatoire présente lors de l’expérimentation.
+  Il s’agit donc d’une quantité de variation qui ne peut pas être attribuée aux variables (X) incluses dans l’expérimentation.
 Espérance mathématique (d’une variable aléatoire uniquement) : - Valeur de cette V.A. dans le voisinage de laquelle on a une probabilité importante d’observer la valeur obtenue lorsqu’on réalise l’épreuve.
   - Quand on répète l’épreuve associée à la V.A., la moyenne statistique des valeurs successives réellement observées tend vers l’espérance mathématique, lorsque le nombre des réalisations tend vers l’infini.
 Estimation (statistique) : Ordre de grandeur pour la valeur inconnue d’une statistique de population. S’obtient à partir d’une ou plusieurs statistiques (dites estimateurs) d’un échantillon représentatif de cette population.

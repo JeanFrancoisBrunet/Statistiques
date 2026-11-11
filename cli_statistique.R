@@ -12,7 +12,7 @@
 #    descriptif, normalite, t, anova, capabilite, kappa
 #    et, dans commandes_avancees.R : ftest, khi2, carte, rr1, rr_croisee, rr_emboitee
 #  Dépendance R : jsonlite  (sudo apt install r-cran-jsonlite)
-#  Auteur : Jean-François BRUNET – JFBConseils – Octobre 2026
+#  Auteur : Jean-François BRUNET – JFBConseils – Novembre 2026
 # =============================================================================
 
 options(warn = 1, stringsAsFactors = FALSE)
