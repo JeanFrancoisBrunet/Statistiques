@@ -197,6 +197,11 @@ cmd_khi2_contingence <- function(d, p, homogeneite) {
   par(mar = c(5, 4.5, 3, 8), xpd = TRUE)
   pr <- t(prop.table(unclass(tab), 1)) * 100
   cl <- PAL(nc)
+  # deux modalités dont l'une est une négation / un défaut (pas, non, absent, défaut…) : rouge pour la négation, vert pour l'autre
+  if (nc == 2) {
+    neg <- grepl("(^|[^[:alpha:]])(pas|non|sans|aucun|absen|d[ée]faut|d[ée]fectu|refus|[ée]chec|rejet|mauvais|ko|no|not|fail|bad|reject|defect)", tolower(colnames(tab)), perl = TRUE)
+    if (sum(neg) == 1) cl <- ifelse(neg, "#c0392b", "#2e8b57")
+  }
   barplot(pr, col = cl, main = "Répartition par ligne (%)", ylab = "%", ylim = c(0, 100), las = if (nr > 6) 2 else 1, border = "white")
   legend("topright", inset = c(-0.2, 0), legend = colnames(tab), fill = cl, bty = "n", cex = 0.85, title = ct$nom_c)
   invisible(dev.off())
@@ -933,6 +938,118 @@ cmd_anova2 <- function(d, p) {
   plot(ajus, rs, pch = 19, cex = 0.8, col = "#2a5d9f", xlab = "Valeurs ajustées", ylab = "Résidus", main = "Résidus selon les valeurs ajustées"); abline(h = 0, col = "#b03030", lwd = 2)
   invisible(dev.off())
   list(titre = "ANOVA à deux facteurs", lignes = c(lignes, "", concl), conclusion = concl, tables = tables, figures = c(fig1, fig2), avertissements = avert)
+}
+
+# =============================================================================
+#  ANOVA à plusieurs facteurs (2 à 6), croisés : effets principaux et interactions jusqu'à l'ordre choisi.
+#  Sommes des carrés ajustées (type III, comme Minitab) ; comparaisons de Tukey des effets principaux significatifs (plan équilibré).
+# =============================================================================
+cmd_anovan <- function(d, p) {
+  vn <- nom_colonne(d, p$valeur, "Colonne des mesures")
+  fn <- unique(as.character(unlist(p$facteurs)))
+  if (length(fn) < 2) stop("Choisir au moins deux facteurs.", call. = FALSE)
+  if (length(fn) > 6) stop("Six facteurs au plus.", call. = FALSE)
+  for (f in fn) nom_colonne(d, f, "Facteur")
+  if (vn %in% fn) stop("La réponse ne peut pas être aussi un facteur.", call. = FALSE)
+  k <- length(fn)
+  ordre <- tolower(as.character(if (is.null(p$interactions)) "2" else p$interactions))
+  ordre <- if (ordre %in% c("aucune", "0", "1")) 1L else if (ordre %in% c("toutes", "all", "max")) k else min(2L, k)
+  y <- col_num(d, vn); G <- lapply(fn, function(f) ch_cat(d[[f]]))
+  ok <- is.finite(y); for (g in G) ok <- ok & !is.na(g)
+  avert <- list()
+  if (sum(!ok) > 0) avert <- c(avert, list(sprintf("%d ligne(s) incomplète(s) écartée(s).", sum(!ok))))
+  y <- y[ok]; dd <- data.frame(y = y)
+  noms_f <- paste0("F", seq_len(k)); names(noms_f) <- fn
+  for (i in seq_len(k)) { g <- G[[i]][ok]; dd[[noms_f[i]]] <- factor(g, levels = force_ordre_numerique(unique(g))) }
+  nl <- vapply(noms_f, function(f) nlevels(dd[[f]]), 1L)
+  if (any(nl < 2)) stop("Chaque facteur doit avoir au moins 2 niveaux.", call. = FALSE)
+  for (f in noms_f) contrasts(dd[[f]]) <- stats::contr.sum(nlevels(dd[[f]]))
+  n <- length(y)
+  construire <- function(o) {
+    form <- stats::as.formula(if (o <= 1L) paste("y ~", paste(noms_f, collapse = " + ")) else paste("y ~ (", paste(noms_f, collapse = " + "), ")^", o))
+    X <- stats::model.matrix(form, dd); list(form = form, X = X, fit = stats::lm.fit(X, dd$y))
+  }
+  m <- construire(ordre)
+  while (m$fit$rank < ncol(m$X) && ordre > 1L) {
+    ordre <- ordre - 1L; m <- construire(ordre)
+    avert <- c(avert, list(sprintf("Certaines combinaisons de niveaux n'ont aucune mesure : les interactions d'ordre supérieur ne sont pas estimables ; le modèle est limité aux interactions d'ordre %d.", ordre)))
+  }
+  if (m$fit$rank < ncol(m$X)) stop("Le plan est trop incomplet pour estimer les effets principaux.", call. = FALSE)
+  form <- m$form; X <- m$X; fitc <- m$fit
+  asg <- attr(X, "assign"); etiq <- attr(stats::terms(form), "term.labels")
+  dfe <- n - fitc$rank; SSe <- sum(fitc$residuals^2)
+  if (dfe < 1) stop("Pas assez de mesures pour estimer l'erreur : il faut plusieurs mesures par combinaison, ou retirer des interactions (« aucune » ou ordre 2).", call. = FALSE)
+  MSe <- SSe / dfe
+  SS <- DF <- numeric(length(etiq))
+  for (i in seq_along(etiq)) { Xr <- X[, asg != i, drop = FALSE]; SS[i] <- sum(stats::lm.fit(Xr, dd$y)$residuals^2) - SSe; DF[i] <- sum(asg == i) }
+  MS <- SS / DF; Fv <- MS / MSe; pv <- stats::pf(Fv, DF, dfe, lower.tail = FALSE)
+  sst <- sum((y - mean(y))^2)
+  vers_nom <- function(e) paste(fn[match(strsplit(e, ":", fixed = TRUE)[[1]], noms_f)], collapse = " × ")
+  nom_t <- vapply(etiq, vers_nom, ""); names(nom_t) <- NULL
+  tab <- data.frame(Source = c(nom_t, "Erreur", "Total"), ddl = c(DF, dfe, n - 1), Somme_carres = c(SS, SSe, sst), Carre_moyen = c(MS, MSe, NA),
+                    F = c(Fv, NA, NA), p_value = c(pv, NA, NA), stringsAsFactors = FALSE)
+  eff <- data.frame(Source = nom_t, Eta2_partiel = SS / (SS + SSe), stringsAsFactors = FALSE)
+  tables <- list(`ANOVA à plusieurs facteurs` = tab, `Taille d'effet` = eff)
+  for (i in seq_len(k)) {
+    g <- dd[[noms_f[i]]]
+    tables[[sprintf("Moyennes — %s", fn[i])]] <- data.frame(Niveau = levels(g), n = as.integer(table(g)), Moyenne = as.numeric(tapply(y, g, mean)),
+                                                            Ecart_type = as.numeric(tapply(y, g, stats::sd)), stringsAsFactors = FALSE)
+  }
+  cellf <- interaction(dd[noms_f], drop = TRUE)
+  cnt <- table(cellf); equilibre <- length(unique(as.vector(cnt))) == 1 && nlevels(cellf) == prod(nl)
+  rs <- fitc$residuals; ajus <- dd$y - rs
+  sw <- if (length(rs) >= 3 && length(rs) <= 5000 && stats::sd(rs) > 0) tryCatch(stats::shapiro.test(rs)$p.value, error = function(e) NA_real_) else NA_real_
+  fl <- if (nlevels(cellf) >= 2 && all(cnt >= 2)) tryCatch(stats::fligner.test(y, cellf)$p.value, error = function(e) NA_real_) else NA_real_
+  lignes <- c(sprintf("Réponse : %s — %d facteurs : %s — %d observations%s.", vn, k, paste(sprintf("%s (%d niveaux)", fn, nl), collapse = ", "), n,
+                      if (equilibre) sprintf(", plan équilibré (%d par combinaison)", cnt[[1]]) else ", plan déséquilibré ou incomplet"),
+              sprintf("Sommes des carrés ajustées (type III) ; %s.", if (ordre == 1L) "modèle sans interaction" else if (ordre >= k) "modèle avec toutes les interactions" else sprintf("interactions jusqu'à l'ordre %d", ordre)),
+              regle(), "")
+  for (i in seq_along(etiq)) {
+    ordre_t <- length(strsplit(etiq[i], ":", fixed = TRUE)[[1]])
+    h0 <- if (ordre_t > 1) sprintf("H0 : pas d'interaction %s", nom_t[i]) else sprintf("H0 : les moyennes ne diffèrent pas selon %s", nom_t[i])
+    lignes <- c(lignes, sprintf("%s — F = %s ; p-value %s → %s", h0, fmt(Fv[i], 4), fmt_p(pv[i]), if (pv[i] < ALPHA) "H0 rejetée" else "H0 non rejetée"))
+  }
+  lignes <- c(lignes, "", sprintf("Contrôle des résidus — Shapiro-Wilk : p = %s ; homogénéité des variances entre combinaisons (Fligner-Killeen) : p = %s.", fmt_p(sw), fmt_p(fl)),
+              sprintf("Pour ces deux contrôles, H0 est l'hypothèse requise : elle est retenue si p-value ≥ α = %s.", alpha_txt()))
+  inter_sig <- nom_t[grepl("×", nom_t, fixed = TRUE) & pv < ALPHA]
+  if (length(inter_sig)) lignes <- c(lignes, sprintf("Interaction(s) significative(s) : %s ; l'effet d'un facteur dépend alors du niveau des autres, interpréter les effets principaux avec prudence (voir les graphiques d'interaction).", paste(inter_sig, collapse = " ; ")))
+  sig <- nom_t[pv < ALPHA]
+  concl <- if (length(sig)) sprintf("Effet(s) significatif(s) au risque α = %s : %s.", alpha_txt(), paste(sig, collapse=" ; ")) else sprintf("Aucun effet significatif au risque α = %s.", alpha_txt())
+  prin <- which(!grepl(":", etiq, fixed = TRUE) & pv < ALPHA)
+  if (equilibre && length(prin)) {
+    tk <- tryCatch(stats::TukeyHSD(stats::aov(form, data = dd), which = etiq[prin]), error = function(e) NULL)
+    if (!is.null(tk)) for (kk in names(tk)) { mm <- tk[[kk]]; tables[[sprintf("Tukey — %s", fn[match(kk, noms_f)])]] <- data.frame(Comparaison = rownames(mm), Difference = mm[, "diff"], Borne_inf = mm[, "lwr"], Borne_sup = mm[, "upr"], p_ajustee = mm[, "p adj"], stringsAsFactors = FALSE) }
+  } else if (!equilibre) avert <- c(avert, list("Plan déséquilibré ou incomplet : les comparaisons de Tukey ne sont pas fournies."))
+  avert <- c(avert, list("Vérifier l'indépendance des observations, la normalité des résidus et l'homogénéité des variances. Plus il y a de facteurs et d'interactions, plus il faut de mesures : il faut au moins 2 mesures par combinaison pour tester l'interaction d'ordre le plus élevé."))
+  if (!is.na(sw) && sw < ALPHA) avert <- c(avert, list("La normalité des résidus est rejetée : interpréter les p-values avec prudence."))
+  # figures : effets principaux
+  nc <- min(k, 3); nr <- ceiling(k / nc)
+  fig1 <- lire_png("anovan_effets.png", largeur = 380 * nc, hauteur = 380 * nr)
+  par(mfrow = c(nr, nc), mar = c(4.5, 4.5, 3, 1))
+  yl <- range(y); ec <- diff(yl) * 0.06; yl <- yl + c(-ec, ec)
+  for (i in seq_len(k)) { g <- dd[[noms_f[i]]]; mm <- tapply(y, g, mean)
+    plot(seq_along(mm), mm, type = "b", pch = 19, col = "#2a5d9f", xaxt = "n", xlab = fn[i], ylab = sprintf("Moyenne de %s", vn), main = sprintf("Effet principal — %s", fn[i]), ylim = yl)
+    axis(1, at = seq_along(mm), labels = names(mm)); abline(h = mean(y), lty = 3, col = "#888888") }
+  invisible(dev.off())
+  figs <- c(fig1)
+  # interactions d'ordre 2 (au plus 6 paires)
+  if (ordre >= 2L) {
+    paires <- utils::combn(k, 2, simplify = FALSE); paires <- paires[seq_len(min(length(paires), 6))]
+    npc <- min(length(paires), 3); npr <- ceiling(length(paires) / npc)
+    fig2 <- lire_png("anovan_interactions.png", largeur = 380 * npc, hauteur = 380 * npr)
+    par(mfrow = c(npr, npc), mar = c(4.5, 4.5, 3, 1))
+    for (pr in paires) { a <- dd[[noms_f[pr[1]]]]; b <- dd[[noms_f[pr[2]]]]; mc <- tapply(y, list(a, b), mean)
+      matplot(seq_len(nlevels(a)), mc, type = "b", pch = 19, lty = 1, col = PAL(nlevels(b)), xaxt = "n", xlab = fn[pr[1]], ylab = sprintf("Moyenne de %s", vn), main = sprintf("%s × %s", fn[pr[1]], fn[pr[2]]), ylim = yl)
+      axis(1, at = seq_len(nlevels(a)), labels = levels(a)); legend("topleft", legend = levels(b), col = PAL(nlevels(b)), lty = 1, pch = 19, bty = "n", cex = 0.75, title = fn[pr[2]]) }
+    invisible(dev.off()); figs <- c(figs, fig2)
+  }
+  fig3 <- lire_png("anovan_residus.png", largeur = 1000, hauteur = 480)
+  par(mfrow = c(1, 2), mar = c(4.5, 4.5, 3, 1))
+  qq <- stats::qqnorm(rs, plot.it = FALSE); plot(qq$x, qq$y, pch = 19, cex = 0.8, col = "#2a5d9f", xlab = "Quantiles normaux", ylab = "Résidus", main = "Droite de Henry des résidus")
+  if (length(rs) >= 3) { qqs <- stats::quantile(rs, c(0.25, 0.75)); sl <- diff(qqs) / diff(stats::qnorm(c(0.25, 0.75))); abline(qqs[1] - sl * stats::qnorm(0.25), sl, col = "#b03030", lwd = 2) }
+  plot(ajus, rs, pch = 19, cex = 0.8, col = "#2a5d9f", xlab = "Valeurs ajustées", ylab = "Résidus", main = "Résidus selon les valeurs ajustées"); abline(h = 0, col = "#b03030", lwd = 2)
+  invisible(dev.off())
+  list(titre = "ANOVA à plusieurs facteurs", lignes = c(lignes, "", concl), conclusion = concl, tables = tables, figures = c(figs, fig3), avertissements = avert)
 }
 
 # =============================================================================
