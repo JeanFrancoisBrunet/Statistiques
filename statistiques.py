@@ -162,7 +162,7 @@ ILLUSTRATIONS = [
 # thème proposé par le bouton « Illustration… » de chaque onglet d'analyse
 ILLUSTRATION_ONGLET = {"Descriptif": "stat_descriptive", "Normalité": "loi_normale", "Test t": "test_t_1", "Test Z": "test_z", "Khi²": "khi2",
                        "Identification de loi": "interpreter_distribution", "Graphiques": "boite_moustaches",
-                       "ANOVA": "tests_hypotheses", "ANOVA 2 facteurs": "tests_hypotheses", "Puissance": "risques_alpha_beta", "R&R": "msa",
+                       "ANOVA": "tests_hypotheses", "ANOVA 2 facteurs": "tests_hypotheses", "ANOVA multi-facteurs": "tests_hypotheses", "Puissance": "risques_alpha_beta", "R&R": "msa",
                        "Cartes de contrôle": "carte_controle", "Cartes d'attributs": "carte_controle", "Données": "types_donnees", "Rapport": "demarche_6sigma"}
 
 
@@ -429,6 +429,12 @@ class Donnees:
         self.colonnes[n] = list(valeurs)
         self.types[n] = type_
         return n
+
+    def supprimer_colonnes(self, noms):
+        """Retire des colonnes du jeu de données (les autres sont conservées telles quelles)."""
+        for n in noms:
+            self.colonnes.pop(n, None)
+            self.types.pop(n, None)
 
     def vers_dict(self):
         return {"colonnes": self.colonnes, "types": self.types,
@@ -1167,11 +1173,17 @@ Analyses :
 • Corrélation : coefficients de Pearson, Spearman ou Kendall pour toutes les paires de séries, avec p-value (H0 : pas de corrélation), intervalle de confiance (Pearson) et matrice graphique.
 • Régression : linéaire simple ou multiple, ou polynôme de degré 2 ou 3 pour une variable ; équation, R², analyse de variance, coefficients testés (H0 : coefficient nul), VIF, Durbin-Watson, normalité des résidus, observations inhabituelles, graphiques d'ajustement (bandes de confiance et de prédiction) et de résidus.
 • Série chronologique : tendance linéaire, quadratique, exponentielle ou logistique (courbe en S), avec MAPE, MAD, MSD, test de tendance et prévisions (intervalles de prédiction pour les modèles linéaire, quadratique et exponentiel).
+• Puissance et taille d'échantillon (groupe Tests ; aucune donnée à charger) : pour un test t (1 échantillon, apparié, 2 échantillons), un test z, un test de 1 proportion (loi binomiale exacte), de 2 proportions ou une ANOVA à 1 facteur.
+  Laisser vide une seule des trois cases « taille d'échantillon », « différence à détecter » et « puissance » : elle est calculée à partir des deux autres, avec le risque α (réglage du haut de la fenêtre) et l'écart-type supposé (ou la proportion de référence).
+  La puissance est la probabilité de mettre en évidence une différence réelle de la taille indiquée (puissance = 1 − β). Le résultat comprend la courbe de puissance : puissance en fonction de la différence, pour plusieurs tailles d'échantillon (« Tailles à tracer » : liste facultative, séparée par des espaces).
 • Test F : compare les variances de deux séries (avec le test de Levene, plus robuste) et indique s'il faut préférer le test t de Student ou celui de Welch.
 • ANOVA : un facteur, colonnes = groupes ou format long ; taille d'effet η², contrôle des résidus, tests de Levene et de Fligner-Killeen,
   ANOVA de Welch et Kruskal-Wallis en alternative ; comparaisons de Tukey si le test global est significatif (de Welch avec ajustement de Holm si les variances diffèrent).
 • ANOVA 2 facteurs : une colonne de mesures et deux colonnes de facteurs, avec ou sans interaction ; sommes des carrés ajustées (type III), taille d'effet η² partiel,
   moyennes par niveau et par combinaison, graphiques des effets principaux et de l'interaction, contrôle des résidus, comparaisons de Tukey des facteurs significatifs (plan équilibré).
+• ANOVA multi-facteurs (3 facteurs ou plus, jusqu'à 6) : une colonne de mesures et une colonne par facteur ; interactions au choix (aucune, jusqu'à l'ordre 2, ou toutes) ;
+  mêmes sommes des carrés (type III), η² partiel, moyennes par niveau, graphiques des effets principaux et des interactions deux à deux, contrôle des résidus et Tukey (plan équilibré).
+  Si certaines combinaisons de niveaux n'ont aucune mesure, les interactions d'ordre trop élevé sont retirées automatiquement (avec un avertissement).
 • Khi² : trois tests, avec données brutes (deux colonnes de catégories) ou tableau d'effectifs déjà compté :
   – indépendance de deux variables ; homogénéité de plusieurs populations (même calcul, interprétation différente) ; effectifs observés et théoriques, résidus, V de Cramér,
     correction de Yates et test exact de Fisher pour un tableau 2 × 2 ou si les effectifs théoriques sont trop petits ;
@@ -1876,6 +1888,7 @@ class Application:
         self._onglet_f(g)
         self._onglet_anova(g)
         self._onglet_anova2(g)
+        self._onglet_anovan(g)
         self._onglet_khi2(g)
         g = self._groupe(nb, "Modélisation")
         self._onglet_correlation(g)
@@ -2980,6 +2993,16 @@ class Application:
             {"id": "interaction", "lib": "Interaction A × B", "type": "case", "defaut": True, "aide": "à retirer s'il n'y a qu'une mesure par combinaison"}]
         self.z_anova2, _ = self._onglet_decl(nb, "ANOVA 2 facteurs", "an2", champs, "anova2",
                                              aide="Une ligne par mesure, avec une colonne pour chaque facteur. Sommes des carrés ajustées (type III) ; comparaisons de Tukey pour les facteurs significatifs si le plan est équilibré.")
+
+    def _onglet_anovan(self, nb):
+        champs = [
+            {"id": "valeur", "lib": "Réponse (mesures)", "type": "col"},
+            {"id": "facteurs", "lib": "Facteurs (2 à 6)", "type": "cols", "cols": "all", "exclure": "valeur", "hauteur": 6,
+             "aide": "colonnes de catégories (texte ou numéros de niveaux) ; sélection multiple"},
+            {"id": "interactions", "lib": "Interactions", "type": "choix", "opts": [
+                ("Jusqu'à l'ordre 2 (couples de facteurs)", "2"), ("Toutes les interactions", "toutes"), ("Aucune (effets principaux seuls)", "aucune")]}]
+        self.z_anovan, _ = self._onglet_decl(nb, "ANOVA multi-facteurs", "anm", champs, "anovan",
+                                             aide="Plan croisé à 2 à 6 facteurs : une ligne par mesure, une colonne par facteur. Sommes des carrés ajustées (type III) ; comparaisons de Tukey des effets principaux significatifs si le plan est équilibré. Le nombre de mesures nécessaires croît vite avec les interactions d'ordre élevé.")
 
     # --- Test F
     def _onglet_f(self, nb):
