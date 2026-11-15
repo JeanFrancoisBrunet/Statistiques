@@ -39,6 +39,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import zipfile
 from pathlib import Path
 
@@ -837,11 +838,14 @@ def executer_r(donnees, commande, params, timeout=180, groupe=None):
         donnees.ecrire_csv(dossier / "donnees.csv")
         (dossier / "params.json").write_text(json.dumps({"commande": commande, **params}, ensure_ascii=False), encoding="utf-8")
         env = dict(os.environ, LC_ALL="C.UTF-8", LANG="C.UTF-8")
+        debut = time.monotonic()
         try:
             p = subprocess.run([rs, str(SCRIPT_R), str(dossier / "donnees.csv"), str(dossier)],
                                capture_output=True, text=True, timeout=timeout, env=env)
         except subprocess.TimeoutExpired:
+            print(f"[R] {commande} : délai dépassé ({time.monotonic() - debut:.1f} s)", file=sys.stderr, flush=True)
             raise ErreurStat("Le calcul R a dépassé le délai autorisé.")
+        print(f"[R] {commande} : {time.monotonic() - debut:.1f} s", file=sys.stderr, flush=True)   # durée du calcul, visible dans journalctl
         sortie = dossier / "resultat.json"
         if not sortie.is_file():
             detail = (p.stderr or p.stdout or "").strip().splitlines()

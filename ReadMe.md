@@ -191,11 +191,33 @@ journalctl -u telegram-bot-statistiques -n 50 --no-pager
 sudo systemctl restart telegram-bot-statistiques   # après modification du bot ou de statistiques.py
 ```
 
+### Journal du bot : durée des calculs et lenteurs
+
+Le bot n'écrit pas de fichier de journal : ses messages vont dans le journal de systemd, que l'on lit avec `journalctl`. Trois sortes de lignes aident à comprendre une lenteur :
+
+| Ligne                       | Signification                                                                                          |
+|---                          |---                                                                                                     |
+| `[R] commande : 0.5 s`      | Durée du calcul R de chaque analyse (écrite par `statistiques.py`)                                     |
+| `[API] méthode : 12.3 s`    | Appel à Telegram ayant duré plus de 3 s (envoi d'un message, d'une image, d'un fichier…)               |
+| `[polling] … 502 …`         | Telegram a refusé ou n'a pas répondu à l'interrogation : problème du côté de Telegram ou du réseau     |
+
+```bash
+journalctl -u telegram-bot-statistiques -f                                               # en direct (Ctrl+C pour quitter)
+journalctl -u telegram-bot-statistiques --since today --no-pager                         # depuis ce matin
+journalctl -u telegram-bot-statistiques --since "1 hour ago" | grep -E "\[R\]|\[API\]"   # durées seulement
+journalctl -u telegram-bot-statistiques -n 50 --no-pager                                 # les 50 dernières lignes
+```
+
+Lecture : une ligne `[R]` longue indique un calcul lent (jeu de données volumineux, simulation) ; une ligne `[API]` longue ou des `[polling]` en erreur indiquent un ralentissement de Telegram ou du réseau, pas de R. Si les deux sont courtes et que le bot semble lent, vérifier la charge du Pi (`uptime`, `free -h`, `top`). Le même suivi par `journalctl` s'applique aux autres bots, avec le nom de leur service.
+
+Les appels à Telegram ont un délai de connexion de 5 s et un délai de réponse de 30 s ; un nouvel essai est fait une fois en cas d'échec de connexion ou de réponse 502, 503 ou 504. Après un délai dépassé, il n'y a pas de nouvel essai, pour ne pas envoyer un message en double.
+
 ### Utilisation depuis le S23
 
 - **Saisir des données** : envoyer un message texte (une série par colonne, noms de colonnes en première ligne), ou joindre un fichier `csv`, `txt`, `tsv`, `dat` ou `xlsx` (20 Mo au maximum). Un message Telegram étant limité à 4096 caractères, utiliser un fichier pour les gros volumes.
 - Chaque nouvel envoi **remplace** les données précédentes.
 - **Analyser** : boutons du menu ou commandes ; les colonnes se désignent par leur numéro (affiché après le chargement et par `/etat`) ou par leur nom.
+- **Boutons** : un clic est pris en compte aussitôt (« ⏳ Pris en compte… » en haut de l'écran) et le clavier du message cliqué disparaît ; si le calcul dépasse 2 s, un message « ⏳ Calcul en cours… » s'affiche, puis disparaît à l'arrivée du résultat. Un nouveau clic pendant un calcul est refusé (« Un calcul est déjà en cours »), ce qui évite les calculs en double.
 - Les résultats arrivent en texte à chasse fixe, suivis des graphiques en images. Quand un argument manque, le bot propose des boutons (colonnes, lois, types de graphique) ou demande la suite de la commande ; les boutons du menu lancent les commandes sans arguments.
 
 | Commande                                                                            | Rôle                                                                                                                 |
