@@ -335,6 +335,11 @@ def _separateur(lignes):
         return " "
     if len(ech) == 1 and len(ech[0].split()) > 1:
         return " "
+    # Colonnes de longueurs différentes séparées par des espaces : la première ligne (noms ou valeurs) donne le nombre de colonnes,
+    # les lignes plus courtes ont des cases vides (à la fin, ou au début si la ligne commence par des espaces)
+    n0 = len(ech[0].split())
+    if n0 > 1 and all(1 <= len(l.split()) <= n0 for l in ech):
+        return " "
     return None
 
 
@@ -513,6 +518,11 @@ def lire_texte(texte, sep="auto", dec="auto", entete="auto"):
     s = _separateur(lignes) if sep == "auto" else (None if sep in (None, "") else sep)
     champs = [_decouper(l, s) for l in lignes]
     d = _decimale(champs, s) if dec == "auto" else dec
+    if s == " ":                                      # ligne plus courte qui commence par des espaces : cases vides au début (« A B » puis « 48 » en colonne B)
+        n0 = len(champs[0])
+        for i, (l, c) in enumerate(zip(lignes, champs)):
+            if len(c) < n0 and l[:1].isspace():
+                champs[i] = [""] * (n0 - len(c)) + c
 
     # Une seule ligne de nombres : c'est une série saisie à l'horizontale
     if len(champs) == 1 and entete in ("auto", False) and all(_convertir(c, d)[1] and c.strip() for c in champs[0]):
@@ -1448,6 +1458,7 @@ class DialogueGeneration:
         self._etat()
         self.win.bind("<Escape>", lambda e: self.win.destroy())
         self.win.bind("<Return>", lambda e: self.generer())
+        self.win.bind("<KP_Enter>", lambda e: self.generer())
 
     def _loi(self):
         return next(l for l in LOIS_GENERATION if l[0] == self.v_loi.get())
@@ -1689,6 +1700,7 @@ def boite_dialogue(parent, titre, message, boutons=("OK",), defaut=0, details=No
             ttk.Label(grille, text=val, wraplength=440, justify="left").grid(row=r, column=1, sticky="nw", pady=2)
     win.bind("<Escape>", lambda e: fin(len(boutons) - 1))
     win.bind("<Return>", lambda e: fin(defaut))
+    win.bind("<KP_Enter>", lambda e: fin(defaut))
     win.protocol("WM_DELETE_WINDOW", lambda: fin(len(boutons) - 1))
     _placer_fenetre(win, parent)
     win.update()                                  # dessine tout le contenu avant d'attendre l'utilisateur
@@ -2051,6 +2063,8 @@ class Application:
 
         for seq in ("<Button-3>", "<Button-2>", "<Control-Button-1>"):
             t.bind(seq, ouvrir)
+        # Entrée du pavé numérique : Tk l'ignore par défaut dans une zone de texte ; elle se comporte comme Entrée
+        t.bind("<KP_Enter>", lambda e: (t.event_generate("<Return>"), "break")[1])
         self.menu_saisie = menu
 
     # --- Analyse par groupe
