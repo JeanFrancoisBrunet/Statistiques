@@ -161,6 +161,7 @@ ILLUSTRATIONS = [
     ("kruskal_wallis", "Test de Kruskal-Wallis"),
 ]
 # thème proposé par le bouton « Illustration… » de chaque onglet d'analyse
+ZONES_SANS_GROUPE = {"Puissance"}          # onglets qui ne portent pas sur les données chargées : pas de rappel du groupe
 ILLUSTRATION_ONGLET = {"Descriptif": "stat_descriptive", "Normalité": "loi_normale", "Test t": "test_t_1", "Test Z": "test_z", "Khi²": "khi2",
                        "Identification de loi": "interpreter_distribution", "Graphiques": "boite_moustaches",
                        "ANOVA": "tests_hypotheses", "ANOVA 2 facteurs": "tests_hypotheses", "ANOVA multi-facteurs": "tests_hypotheses", "Puissance": "risques_alpha_beta", "R&R": "msa",
@@ -789,6 +790,27 @@ class Resultat:
             parts.append("\n".join("Remarque : " + a for a in self.avertissements))
         return "\n\n".join(parts)
 
+    def tableaux_tableur(self):
+        """Tous les tableaux du résultat en texte séparé par des tabulations (collage direct dans un tableur) : nombres à pleine
+        précision, virgule décimale (tableur en français), cases vides pour les valeurs absentes ; un titre précède chaque tableau."""
+        def cellule(v):
+            if v is None or (isinstance(v, float) and math.isnan(v)):
+                return ""
+            if isinstance(v, bool):
+                return "oui" if v else "non"
+            if isinstance(v, int):
+                return str(v)
+            if isinstance(v, float):
+                return str(int(v)) if v == int(v) and abs(v) < 1e15 else repr(v).replace(".", ",")
+            return " ".join(str(v).split())
+        blocs = []
+        for nom, (cols, rows) in self.tables.items():
+            lib = nom in self.libres
+            lignes = [libelle(nom), "\t".join(" ".join((str(c) if lib else libelle(c)).split()) for c in cols)]
+            lignes += ["\t".join(cellule(v) for v in r) for r in rows]
+            blocs.append("\n".join(lignes))
+        return "\n\n".join(blocs)
+
     def pour_rapport(self):
         """Contenu mis en forme pour le rapport PDF (tableaux déjà formatés)."""
         tables = []
@@ -1048,8 +1070,27 @@ class Etude:
                              "variances_egales": bool(variances_egales), "alternative": alternative})
 
     def anova(self, mode, colonnes=None, valeur=None, groupe=None):
-        return self._r("anova", {"mode": mode, "colonnes": list(colonnes) if colonnes else None,
-                                 "valeur": valeur, "groupe": groupe})
+        params = {"mode": mode, "colonnes": list(colonnes) if colonnes else None, "valeur": valeur, "groupe": groupe}
+        g = self.groupe
+        if mode == "long" and g and g.get("colonne") == groupe:
+            # La colonne de groupes de l'ANOVA est aussi celle de « Analyser par groupe » : découper par groupe laisserait un seul niveau
+            # dans chaque calcul (« l'ANOVA exige au moins deux groupes »). L'ANOVA compare justement ces groupes : on la lance
+            # une seule fois, sur les lignes des groupes retenus.
+            d = self._d()
+            etiq = d.groupe_etiquettes(g["colonne"], g.get("periode"))
+            garder = set(g.get("valeurs") or [])
+            if not garder:
+                raise ErreurStat("Aucun groupe sélectionné : choisir au moins un groupe, ou « — aucun — » pour analyser l'ensemble des données.")
+            idx = [i for i, e in enumerate(etiq) if e in garder]
+            sous = Donnees({n: [c[i] for i in idx] for n, c in d.colonnes.items()}, dict(d.types), d.avertissements, d.source)
+            r = executer_r(sous, "anova", {**params, "echelle": self.echelle, "alpha_test": self.alpha})
+            note = (f"« Analyser par groupe » porte sur la même colonne que les groupes de l'ANOVA (« {groupe} ») : "
+                    "l'ANOVA a été calculée une seule fois, en comparant ces groupes entre eux.")
+            r.avertissements.append(note)
+            if isinstance(r.brut.get("avertissements"), list):
+                r.brut["avertissements"].append(note)
+            return r
+        return self._r("anova", params)
 
     def capabilite(self, colonne, lsl=None, usl=None, cible=None, sigma_intra=None):
         if lsl is None and usl is None:
@@ -1068,6 +1109,35 @@ class Etude:
         if not evaluateurs:
             raise ErreurStat("Sélectionner au moins un évaluateur, différent de la colonne de référence.")
         return self._r("kappa", {"reference": reference, "evaluateurs": evaluateurs})
+
+    @staticmethod
+    def operateur_de_colonne(nom):
+        """Opérateur d'une colonne d'évaluation : le nom sans son numéro d'essai final (A1, A2, A3 → A ; « Op B_2 » → Op B)."""
+        m = re.match(r"^(.*?)[\s_\-.]*\d+$", str(nom).strip())
+        return (m.group(1).strip() if m and m.group(1).strip() else str(nom).strip())
+
+    def kappa_operateurs(self, reference, evaluateurs):
+        """Évaluation par opérateur : plusieurs essais par opérateur, chacun dans sa colonne (A1, A2, A3…), contre une norme."""
+        if not reference:
+            raise ErreurStat("Choisir la colonne de référence (norme).")
+        evaluateurs = [e for e in evaluateurs if e != reference]
+        if not evaluateurs:
+            raise ErreurStat("Sélectionner les colonnes d'évaluation (un essai par colonne), différentes de la référence.")
+        ops = [self.operateur_de_colonne(e) for e in evaluateurs]
+        return self._r("kappa_operateurs", {"reference": reference, "evaluateurs": evaluateurs, "operateurs": ops})
+
+    def attribut_analytique(self, reference, acceptations, essais, lit, lst, loi="normale"):
+        """Étude d'instrumentation d'attribut, méthode analytique (référence continue, nombre d'acceptations sur n essais)."""
+        if not reference or not acceptations:
+            raise ErreurStat("Choisir la colonne des valeurs de référence et celle du nombre d'acceptations.")
+        if reference == acceptations:
+            raise ErreurStat("Les deux colonnes doivent être différentes.")
+        if essais is None:
+            raise ErreurStat("Saisir le nombre d'essais par pièce.")
+        if lit is None and lst is None:
+            raise ErreurStat("Saisir au moins une limite de tolérance (inférieure ou supérieure).")
+        return self._r("attribut_analytique", {"reference": reference, "acceptations": acceptations, "essais": essais,
+                                               "lit": lit, "lst": lst, "loi": loi})
 
     def commande(self, nom, params):
         """Commande R quelconque (analyses avancées : test F, khi², cartes de contrôle, R&R)."""
@@ -1156,6 +1226,9 @@ Données :
 • Une saisie sans ligne de noms est possible si toutes les valeurs de la première ligne sont numériques.
 • Pour un Kappa avec référence : soit une ligne par échantillon, une colonne de référence (reconnue automatiquement si son nom évoque une référence ou une norme)
   et une colonne par évaluateur ou par essai ; soit une ligne par évaluation (colonnes réponse, évaluateur, échantillon, essai, référence : format long, reconnu à ses noms de colonnes).
+• Équivalence (Tests) : test d'équivalence TOST à 1 échantillon (moyenne et cible), à 2 échantillons indépendants ou apparié ; l'utilisateur fixe la marge (symétrique ou limites asymétriques) sur la différence.
+• Kappa — évaluation par opérateur : avec une référence et plusieurs essais par opérateur (colonnes A1, A2, A3, B1…), cocher « Évaluation par opérateur » ; les colonnes sont regroupées par leur nom sans être fusionnées (tableaux intra-opérateur, opérateur / norme, entre opérateurs, tous les opérateurs et la norme).
+• Kappa — instrumentation d'attribut, méthode analytique : une ligne par pièce (valeur de référence connue, nombre d'acceptations sur n essais), nombre d'essais et limite(s) de tolérance ; biais, répétabilité et courbe de performance.
 • « Générer des données… » crée une variable aléatoire : tirage « aléatoire (random) » entre deux bornes, sans loi particulière, ou loi au choix (normale, uniforme, Poisson, Student, Fisher, khi², binomiale, géométrique, hypergéométrique, exponentielle, gamma, logistique, Weibull, log-normale, bêta), avec les paramètres de la loi,
   le nombre de valeurs, le nom de la variable, le nombre de décimales et, si on le souhaite, une valeur d'initialisation pour retrouver exactement le même tirage. La variable s'ajoute aux données chargées, ou les remplace si on le demande.
 
@@ -1166,6 +1239,7 @@ Dates et groupes :
 • Une colonne dont toutes les valeurs sont des dates (JJ/MM/AAAA, AAAA-MM-JJ, avec ou sans heure hh:mm[:ss] ; les dates d'un fichier xlsx sont reconnues aussi) est de type « date » : elle est affichée « (date) » dans le tableau et traitée comme un repère de temps, non comme un nombre.
 • « Analyser par groupe » (en haut de la fenêtre) : choisir une colonne de groupes (texte, nombre ou date par jour, mois ou année), puis éventuellement « Choisir les groupes… » pour ne garder que certains groupes.
   Toutes les analyses des onglets (descriptif, normalité, tests, ANOVA, capabilité, cartes, R&R, khi², Kappa en deux colonnes ou avec colonne de référence) sont alors lancées groupe par groupe : un bloc de résultats, des tableaux et des graphiques par groupe (le nom du groupe est inscrit en haut de chaque graphique).
+  Chaque onglet d'analyse rappelle le groupe actif au-dessus des résultats ; « Changer le groupe… » y ouvre le même choix (réglage commun à tous les onglets).
   « — aucun — » ramène à l'analyse de l'ensemble des données. Un groupe où l'analyse est impossible (trop peu de valeurs, par exemple) est signalé et les autres groupes sont traités. Le Kappa en format long n'est pas découpé par groupe.
 • Cartes de contrôle : « Ordre des données » classe les points par date (ou par numéro d'ordre) et l'utilise comme étiquette de l'axe ; une colonne de dates est proposée par défaut quand elle existe.
 
@@ -1539,9 +1613,16 @@ class ZoneResultat:
         barre = ttk.Frame(self.frame)
         barre.pack(fill="x", pady=(6, 2))
         ttk.Button(barre, text="Enregistrer le résultat…", command=self.enregistrer).pack(side="left")
+        ttk.Button(barre, text="Copier le résultat", command=self.copier).pack(side="left", padx=(8, 0))
+        ttk.Button(barre, text="Copier les tableaux (tableur)", command=lambda: self.copier(True)).pack(side="left", padx=(8, 0))
         ttk.Button(barre, text="Graphiques en plein écran…", command=self.agrandir).pack(side="left", padx=8)
         if ILLUSTRATION_ONGLET.get(nom):
             ttk.Button(barre, text="Illustration…", command=lambda: app.ouvrir_illustration(ILLUSTRATION_ONGLET[nom])).pack(side="left")
+        if nom not in ZONES_SANS_GROUPE:
+            ligne_g = ttk.Frame(self.frame)
+            ligne_g.pack(fill="x", pady=(0, 4))
+            ttk.Button(ligne_g, text="Changer le groupe…", command=app.changer_groupe_dialogue).pack(side="left")
+            ttk.Label(ligne_g, textvariable=app.v_gactif, foreground="#555555", wraplength=1100, justify="left").pack(side="left", padx=8)
         self.pan = ttk.PanedWindow(self.frame, orient="horizontal")
         self.pan.pack(fill="both", expand=True)
         gauche = ttk.Frame(self.pan)
@@ -1637,6 +1718,24 @@ class ZoneResultat:
         t.yview_moveto(0)
         self._montrer_graphes(bool(res.figures))
         self.graphes.definir(res.figures)
+
+    def copier(self, tableur=False):
+        """Copie dans le presse-papiers le texte du résultat (titre, lignes, tableaux, remarques), à coller dans un traitement de texte
+        ou un courriel ; avec tableur=True, les tableaux seuls, séparés par des tabulations, à coller dans un tableur."""
+        from tkinter import messagebox
+        if self.resultat is None:
+            messagebox.showinfo(TITRE, "Aucun résultat à copier.")
+            return
+        contenu = self.resultat.tableaux_tableur() if tableur else self.resultat.texte()
+        if not contenu.strip():
+            messagebox.showinfo(TITRE, "Ce résultat ne contient aucun tableau.")
+            return
+        racine = self.app.root
+        racine.clipboard_clear()
+        racine.clipboard_append(contenu + "\n")
+        racine.update()                      # le contenu reste disponible après la fermeture éventuelle de la fenêtre
+        self.app.statut(("Tableaux copiés (à coller dans un tableur)" if tableur else "Résultat copié dans le presse-papiers")
+                        + " : Ctrl+V pour coller.")
 
     def enregistrer(self):
         from tkinter import filedialog, messagebox
@@ -1785,6 +1884,7 @@ class Application:
         self.v_alpha = tk.StringVar(value="0,05")
         self.v_gcol, self.v_gper = tk.StringVar(value=AUCUN_GROUPE), tk.StringVar(value="Jour")
         self.v_gresume = tk.StringVar(value="aucun : toutes les données sont analysées ensemble.")
+        self.v_gactif = tk.StringVar(value="Groupe : aucun (toutes les données sont analysées ensemble)")   # rappel affiché dans chaque onglet d'analyse
         self.groupe_vals = []
         self._construire()
         self._maj_choix()
@@ -1898,6 +1998,7 @@ class Application:
         g = self._groupe(nb, "Tests")
         self._onglet_t(g)
         self._onglet_z(g)
+        self._onglet_equivalence(g)
         self._onglet_poisson(g)
         self._onglet_puissance(g)
         self._onglet_estimation(g)
@@ -2083,6 +2184,7 @@ class Application:
             self.groupe_vals = []
             self.etude.groupe = None
             self.v_gresume.set("aucun : toutes les données sont analysées ensemble.")
+            self.v_gactif.set("Groupe : aucun (toutes les données sont analysées ensemble)")
             return
         est_date = d.types[col] == "date"
         self.cb_gper.configure(state="readonly" if est_date else "disabled")
@@ -2103,6 +2205,7 @@ class Application:
         d, col = self.etude.donnees, self.v_gcol.get()
         if d is None or col not in d.colonnes or not self.groupe_vals:
             self.etude.groupe = None
+            self.v_gactif.set("Groupe : aucun (toutes les données sont analysées ensemble)")
             return
         per = self._periode_groupe(col)
         tous = d.groupe_valeurs(col, per)
@@ -2111,6 +2214,52 @@ class Application:
         if len(liste) > 70:
             liste = liste[:67] + "…"
         self.v_gresume.set(f"{len(self.groupe_vals)} groupe(s) sur {len(tous)} : {liste} — chaque analyse est lancée groupe par groupe.")
+        self.v_gactif.set(f"Groupe actif : « {col} » — {len(self.groupe_vals)} groupe(s) sur {len(tous)} : {liste} — chaque analyse est lancée groupe par groupe.")
+
+    def changer_groupe_dialogue(self):
+        """Raccourci des onglets d'analyse : choisir la colonne de groupes (même réglage que « Analyser par groupe » en haut)."""
+        tk, ttk = self.tk, self.ttk
+        from tkinter import messagebox
+        d = self.etude.donnees
+        if d is None or not d.noms:
+            messagebox.showinfo(TITRE, "Charger d'abord des données (onglet Données).")
+            return
+        win = tk.Toplevel(self.root)
+        win.title(f"{TITRE} — groupe")
+        win.transient(self.root)
+        cadre = ttk.Frame(win, padding=12)
+        cadre.pack(fill="both", expand=True)
+        ttk.Label(cadre, text="Analyser par groupe (colonne de groupes) :").pack(anchor="w")
+        v_col, v_per = tk.StringVar(value=self.v_gcol.get()), tk.StringVar(value=self.v_gper.get())
+        cb = ttk.Combobox(cadre, textvariable=v_col, state="readonly", width=30, values=[AUCUN_GROUPE] + d.noms)
+        cb.pack(anchor="w", pady=(4, 8))
+        lig = ttk.Frame(cadre)
+        lig.pack(anchor="w")
+        ttk.Label(lig, text="Période (colonne de dates) :").pack(side="left")
+        cp = ttk.Combobox(lig, textvariable=v_per, state="disabled", width=8, values=list(PERIODES_DATE))
+        cp.pack(side="left", padx=6)
+
+        def maj(*_):
+            cp.configure(state="readonly" if v_col.get() in d.types and d.types[v_col.get()] == "date" else "disabled")
+        cb.bind("<<ComboboxSelected>>", maj)
+        maj()
+
+        def valider(choisir=False):
+            self.v_gcol.set(v_col.get())
+            self.v_gper.set(v_per.get())
+            self._changer_groupe()
+            win.destroy()
+            if choisir and self.v_gcol.get() != AUCUN_GROUPE:
+                self._choisir_groupes()
+        barre = ttk.Frame(cadre)
+        barre.pack(fill="x", pady=(12, 0))
+        ttk.Button(barre, text="Annuler", command=win.destroy).pack(side="right")
+        ttk.Button(barre, text="OK", command=valider).pack(side="right", padx=4)
+        ttk.Button(barre, text="OK, puis choisir les groupes…", command=lambda: valider(True)).pack(side="right", padx=4)
+        win.bind("<Return>", lambda e: valider())
+        win.bind("<KP_Enter>", lambda e: valider())
+        _placer_fenetre(win, self.root, 460)
+        win.grab_set()
 
     def _choisir_groupes(self):
         tk, ttk = self.tk, self.ttk
@@ -2904,6 +3053,27 @@ class Application:
             {"id": "alternative", "lib": "Hypothèse alternative", "type": "choix", "opts": self.ALT3}]
         self.z_z, _ = self._onglet_decl(nb, "Test Z", "z", champs, "z")
 
+    def _onglet_equivalence(self, nb):
+        champs = [
+            {"id": "mode", "lib": "Test", "type": "choix", "opts": [("2 échantillons indépendants", "deux"), ("1 échantillon (moyenne et cible)", "un"),
+                                                                   ("Échantillons appariés", "apparie")]},
+            {"id": "x", "lib": "Série X (test, formulation à valider)", "type": "col"},
+            {"id": "y", "lib": "Série Y (référence)", "type": "col", "rang": 1, "si": lambda v: v["mode"] != "un"},
+            {"id": "cible", "lib": "Valeur cible", "type": "num", "defaut": "0", "si": lambda v: v["mode"] == "un",
+             "aide": "l'équivalence porte sur l'écart entre la moyenne de X et cette cible"},
+            {"id": "variances_egales", "lib": "Variances égales", "type": "case", "si": lambda v: v["mode"] == "deux",
+             "aide": "sinon test de Welch (recommandé)"},
+            {"id": "intervalle", "lib": "Intervalle d'équivalence", "type": "choix", "opts": [("Symétrique : ± marge", "sym"), ("Asymétrique : limites inférieure et supérieure", "asym")]},
+            {"id": "marge", "lib": "Marge d'équivalence", "type": "num", "si": lambda v: v["intervalle"] == "sym",
+             "aide": "écart maximal sans importance en pratique, dans l'unité des mesures"},
+            {"id": "lim_inf", "lib": "Limite inférieure", "type": "num", "si": lambda v: v["intervalle"] == "asym"},
+            {"id": "lim_sup", "lib": "Limite supérieure", "type": "num", "si": lambda v: v["intervalle"] == "asym",
+             "aide": "limites sur la différence (X − cible, X − Y, ou moyenne des différences)"}]
+        self.z_equiv, _ = self._onglet_decl(nb, "Équivalence", "eqv", champs, "equivalence",
+                                            aide="Test d'équivalence (TOST, deux tests unilatéraux) : H0 = la différence est hors de l'intervalle d'équivalence ; "
+                                                 "l'équivalence est démontrée si la p-value est inférieure à α, soit si l'intervalle de confiance à 100 (1 − 2 α) % "
+                                                 "(90 % pour α = 0,05) est entièrement dans l'intervalle d'équivalence. Fixer la marge avant l'analyse.")
+
     def _onglet_poisson(self, nb):
         SRC = [("Colonne de comptages", "col"), ("Totaux saisis", "resume")]
         m2 = lambda v: v["mode"] == "2"
@@ -3364,7 +3534,54 @@ class Application:
             setattr(self, attr, cb)
         ttk.Label(c, text="Une ligne par évaluation : la réponse donnée, l'évaluateur, l'échantillon (et l'essai s'il y en a plusieurs)\n"
                           "et la valeur de référence de l'échantillon, répétée sur chaque ligne.").grid(row=7, column=2, rowspan=2, sticky="w", padx=12)
-        ttk.Button(c, text="Calculer", command=self.run_kappa).grid(row=12, column=1, sticky="w", pady=8)
+        self.v_kop = tk.BooleanVar(value=False)
+        ttk.Checkbutton(c, variable=self.v_kop, text="Évaluation par opérateur : colonnes d'un même opérateur regroupées par leur nom (A1, A2, A3 → opérateur A) ;\n"
+                                                      "tableaux intra-opérateur, opérateur / norme, entre opérateurs, tous les opérateurs et la norme").grid(
+            row=4, column=2, sticky="w", padx=12)
+        ttk.Radiobutton(c, text="Étude d'instrumentation d'attribut — méthode analytique (référence continue, nombre d'acceptations sur n essais)",
+                        variable=self.v_kmode, value="ana").grid(row=12, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        self.v_karef, self.v_kaacc, self.v_kaess = tk.StringVar(), tk.StringVar(), tk.StringVar(value="20")
+        self.v_kalit, self.v_kalst, self.v_kaloi = tk.StringVar(), tk.StringVar(), tk.StringVar(value="normale")
+        fa = ttk.Frame(c)
+        fa.grid(row=13, column=0, columnspan=3, sticky="w", padx=(20, 0), pady=3)
+        ttk.Label(fa, text="Valeurs de référence").grid(row=0, column=0, sticky="e", padx=(0, 4), pady=2)
+        self.cb_karef = self._combo(fa, self.v_karef)
+        self.cb_karef.grid(row=0, column=1, sticky="w")
+        ttk.Label(fa, text="Nombre d'acceptations").grid(row=0, column=2, sticky="e", padx=(16, 4))
+        self.cb_kaacc = self._combo(fa, self.v_kaacc)
+        self.cb_kaacc.grid(row=0, column=3, sticky="w")
+        ttk.Label(fa, text="Essais par pièce").grid(row=0, column=4, sticky="e", padx=(16, 4))
+        ttk.Entry(fa, textvariable=self.v_kaess, width=6).grid(row=0, column=5, sticky="w")
+        ttk.Label(fa, text="Limite inférieure").grid(row=1, column=0, sticky="e", padx=(0, 4), pady=2)
+        ttk.Entry(fa, textvariable=self.v_kalit, width=12).grid(row=1, column=1, sticky="w")
+        ttk.Label(fa, text="Limite supérieure").grid(row=1, column=2, sticky="e", padx=(16, 4))
+        ttk.Entry(fa, textvariable=self.v_kalst, width=12).grid(row=1, column=3, sticky="w")
+        ttk.Label(fa, text="Loi de la courbe").grid(row=1, column=4, sticky="e", padx=(16, 4))
+        ttk.Combobox(fa, textvariable=self.v_kaloi, state="readonly", width=10, values=["normale", "logistique"]).grid(row=1, column=5, sticky="w")
+        ttk.Label(c, foreground="#555555",
+                  text="Une ligne par pièce : valeur de référence connue et nombre d'acceptations sur n essais. La limite retenue est l'inférieure si l'acceptation augmente "
+                       "avec la référence, la supérieure sinon.\nRésultat : biais (test z), répétabilité (σ), probabilité d'acceptation à la limite, courbe de performance.").grid(
+            row=14, column=0, columnspan=3, sticky="w", padx=20)
+        ttk.Button(c, text="Calculer", command=self.run_kappa).grid(row=15, column=1, sticky="w", pady=8)
+        LIGNES_MODE = {"deux": (1, 2), "ref": (4, 5), "long": (7, 8, 9, 10, 11), "ana": (13, 14)}
+
+        champs_mode = []                                 # (widget, mode) : un widget retiré de la grille n'est plus listé par grid_slaves
+        for w in c.grid_slaves():
+            ligne = int(w.grid_info().get("row", 0))
+            mode = next((m for m, lg in LIGNES_MODE.items() if ligne in lg), None)
+            if mode is not None:
+                champs_mode.append((w, mode))
+
+        def afficher_mode(*_):
+            """Seuls les champs du mode choisi sont affichés : la zone des résultats garde sa place."""
+            actif = self.v_kmode.get()
+            for w, mode in champs_mode:
+                if mode == actif:
+                    w.grid()
+                else:
+                    w.grid_remove()
+        self.v_kmode.trace_add("write", afficher_mode)
+        afficher_mode()
         self.z_kappa = self._nouvelle_zone(f, "Kappa")
 
     def run_kappa(self):
@@ -3372,7 +3589,19 @@ class Application:
         if mode == "ref":
             ref = self.v_kref.get()
             evs = [self.lb_kev.get(i) for i in self.lb_kev.curselection()]
-            self.lancer(self.z_kappa, lambda: self.etude.kappa_reference(ref, evs))
+            if self.v_kop.get():
+                self.lancer(self.z_kappa, lambda: self.etude.kappa_operateurs(ref, evs))
+            else:
+                self.lancer(self.z_kappa, lambda: self.etude.kappa_reference(ref, evs))
+        elif mode == "ana":
+            rf, ac, loi = self.v_karef.get(), self.v_kaacc.get(), self.v_kaloi.get()
+            try:                                         # les variables Tk sont lues ici : le calcul s'exécute dans un autre fil
+                essais = lire_nombre(self.v_kaess.get(), "nombre d'essais")
+                lit, lst = lire_nombre(self.v_kalit.get(), "limite inférieure"), lire_nombre(self.v_kalst.get(), "limite supérieure")
+            except ErreurStat as e:
+                self.z_kappa.afficher_erreur(str(e))
+                return
+            self.lancer(self.z_kappa, lambda: self.etude.attribut_analytique(rf, ac, essais, lit, lst, loi))
         elif mode == "long":
             resp, ev, ech = self.v_kresp.get(), self.v_kev.get(), self.v_kech.get()
             ess, ref = self.v_kess.get(), self.v_kreflong.get()
@@ -3746,6 +3975,11 @@ class Application:
         long_ess = trouver(MOTS_ESSAI, (long_ref, long_ev, long_rep, long_ech))
         for cb in (self.cb_kresp, self.cb_kevl, self.cb_kech, self.cb_kreflong):
             cb["values"] = tout
+        self.cb_karef["values"] = num
+        self.cb_kaacc["values"] = num
+        acc = next((n for n in num if "accept" in n.lower()), "")
+        self.v_kaacc.set(acc or (num[-1] if num else ""))
+        self.v_karef.set(next((n for n in num if n != acc and any(m in n.lower() for m in MOTS_REFERENCE)), "") or (num[0] if num else ""))
         self.cb_kess["values"] = ["— aucun —"] + tout
         self.v_kresp.set(long_rep or (tout[0] if tout else ""))
         self.v_kev.set(long_ev or (tout[1] if len(tout) > 1 else ""))
@@ -3757,12 +3991,15 @@ class Application:
             ref, evs = long_ref, []
             self.v_kmode.set("long")
         elif refs:                                       # colonne de référence (norme) reconnue par son nom : mode référence
-            ref, evs = refs[0], [n for n in cand if n != refs[0]]
+            ref, evs = refs[0], [n for n in cand if n != refs[0] and not any(m in n.lower() for m in MOTS_ECHANTILLON)]
             self.v_kmode.set("ref")
         else:
             ref, evs = (cand[0] if cand else ""), cand[1:]
             self.v_kmode.set("deux")
         self.v_kref.set(ref)
+        self.v_kop.set(bool(refs) and len(evs) > 1 and len({Etude.operateur_de_colonne(e) for e in evs}) < len(evs))   # A1, A2, A3… : plusieurs essais par opérateur
+        if acc:                                          # colonne « Acceptations » : étude d'attribut, méthode analytique
+            self.v_kmode.set("ana")
         for i, n in enumerate(tout):
             if n in evs:
                 self.lb_kev.select_set(i)

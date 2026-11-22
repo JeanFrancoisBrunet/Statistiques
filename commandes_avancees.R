@@ -7,6 +7,9 @@
 #    rr_croisee   : étude R&R croisée (méthode ANOVA, conventions Minitab)
 #    rr_emboitee  : étude R&R emboîtée (pièces emboîtées dans les opérateurs)
 #    anova2       : ANOVA à deux facteurs (avec ou sans interaction)
+#    kappa_operateurs    : Kappa par opérateur (plusieurs essais) contre la norme, intra et entre opérateurs
+#    attribut_analytique : étude d'instrumentation d'attribut, méthode analytique (biais, répétabilité)
+#    equivalence         : test d'équivalence (TOST), un échantillon, deux échantillons, appariés
 #  Ce fichier est chargé par cli_statistique.R (il utilise ses fonctions utilitaires).
 #  Auteur : Jean-François BRUNET – JFBConseils – Novembre 2026
 # =============================================================================
@@ -2131,4 +2134,349 @@ cmd_puissance <- function(d, p) {
   invisible(dev.off())
   list(titre = "Puissance et taille d'échantillon", lignes = lignes, conclusion = what, tables = list(Puissance = tab), tables_libres = "Puissance", figures = c(fig),
        avertissements = list("La puissance est la probabilité de mettre en évidence une différence réelle de la taille indiquée. Elle dépend du risque α, de la dispersion (écart-type) et de la taille d'échantillon ; la courbe montre son évolution avec la différence."))
+}
+
+# =============================================================================
+#  Kappa : évaluation par opérateur (plusieurs essais par opérateur) et norme — tableaux « à la Minitab » :
+#    intra-opérateur (répétabilité), opérateur / norme, entre opérateurs, tous les opérateurs / norme.
+#  Les essais d'un opérateur restent dans des colonnes séparées (A1, A2, A3…) ; « operateurs » donne l'opérateur de chaque colonne.
+# =============================================================================
+ic_exact <- function(x, n) {
+  if (!is.finite(n) || n < 1) return(c(NA_real_, NA_real_))
+  100 * as.numeric(stats::binom.test(x, n, conf.level = 1 - ALPHA)$conf.int)
+}
+ligne_accord <- function(lib, n, x) {
+  ic <- ic_exact(x, n)
+  data.frame(Operateur = lib, Inspections = n, Concordances = x, Pct_concordance = if (n > 0) 100 * x / n else NA_real_,
+             IC_inf = ic[1], IC_sup = ic[2], stringsAsFactors = FALSE)
+}
+# Kappa de Fleiss (m évaluations par échantillon) : global et par modalité, avec écart-type sous H0 (Fleiss, 1981) et p-value unilatérale.
+kappa_fleiss <- function(M) {                      # M : matrice N × m de modalités (texte), sans valeur manquante
+  N <- nrow(M); m <- ncol(M)
+  if (N < 1 || m < 2) return(NULL)
+  niv <- sort(unique(as.vector(M)))
+  nij <- t(apply(M, 1, function(r) as.numeric(table(factor(r, levels = niv)))))
+  if (N == 1) nij <- matrix(nij, nrow = 1)
+  pj <- colSums(nij) / (N * m); qj <- 1 - pj
+  Pi <- (rowSums(nij^2) - m) / (m * (m - 1))
+  Pe <- sum(pj^2)
+  kg <- if (abs(1 - Pe) < 1e-12) NA_real_ else (mean(Pi) - Pe) / (1 - Pe)
+  den <- N * m * (m - 1)
+  kj <- vapply(seq_along(niv), function(j) if (pj[j] <= 0 || pj[j] >= 1) NA_real_ else 1 - sum(nij[, j] * (m - nij[, j])) / (den * pj[j] * qj[j]), 0)
+  sq <- sum(pj * qj)
+  seg <- if (sq <= 0) NA_real_ else sqrt(2) / (sq * sqrt(den)) * sqrt(max(sq^2 - sum(pj * qj * (qj - pj)), 0))
+  sej <- sqrt(2 / den)
+  list(niveaux = niv, kappa = kg, se = seg, kj = kj, sej = sej)
+}
+tab_fleiss <- function(lib, f) {
+  if (is.null(f)) return(NULL)
+  z <- function(k, s) if (is.na(k) || is.na(s) || s <= 0) NA_real_ else k / s
+  zg <- z(f$kappa, f$se); zj <- vapply(f$kj, function(k) z(k, f$sej), 0)
+  data.frame(Operateur = lib, Reponse = c("Globale", f$niveaux), Kappa = c(f$kappa, f$kj), Z = c(zg, zj),
+             p_value = c(if (is.na(zg)) NA_real_ else 1 - stats::pnorm(zg), ifelse(is.na(zj), NA_real_, 1 - stats::pnorm(zj))),
+             stringsAsFactors = FALSE)
+}
+# Kappa de Cohen avec les essais cumulés contre la norme (globale, puis une modalité contre les autres)
+kappa_vs_norme <- function(r0, M) {
+  m <- ncol(M)
+  rr <- rep(r0, m); v <- as.vector(M)
+  niv <- sort(unique(c(rr, v)))
+  g <- kappa_agreement(rr, v)$kappa_cohen
+  kj <- vapply(niv, function(l) { a <- ifelse(rr == l, "1", "0"); b <- ifelse(v == l, "1", "0")
+                                  if (length(unique(c(a, b))) < 2) NA_real_ else kappa_agreement(a, b)$kappa_cohen }, 0)
+  list(niveaux = niv, kappa = g, kj = kj)
+}
+
+cmd_kappa_operateurs <- function(d, p) {
+  rn <- nom_colonne(d, p$reference, "Référence (norme)")
+  evs <- as.character(unlist(p$evaluateurs)); ops <- as.character(unlist(p$operateurs))
+  if (length(evs) != length(ops) || !length(evs)) stop("Chaque colonne d'évaluation doit être associée à un opérateur.", call. = FALSE)
+  for (e in evs) nom_colonne(d, e, "Évaluateur")
+  noms_op <- unique(ops)
+  if (length(noms_op) < 1) stop("Aucun opérateur.", call. = FALSE)
+  r0 <- ch_cat(d[[rn]])
+  E <- do.call(cbind, lapply(evs, function(e) ch_cat(d[[e]]))); colnames(E) <- evs
+  ok <- !is.na(r0) & rowSums(is.na(E)) == 0
+  N <- sum(ok)
+  if (N < 1) stop("Aucune pièce n'est évaluée par tous les opérateurs à tous les essais, avec une référence.", call. = FALSE)
+  r0 <- r0[ok]; E <- E[ok, , drop = FALSE]
+  ecartees <- sum(!ok)
+  par_op <- lapply(noms_op, function(o) E[, ops == o, drop = FALSE]); names(par_op) <- noms_op
+  essais <- vapply(par_op, ncol, 1L)
+  tous_egaux <- function(M) apply(M, 1, function(r) length(unique(r)) == 1)
+
+  # 1. intra-opérateur : tous les essais d'un opérateur identiques entre eux
+  intra <- do.call(rbind, lapply(noms_op, function(o) {
+    M <- par_op[[o]]
+    if (ncol(M) < 2) return(data.frame(Operateur = o, Inspections = N, Concordances = NA_integer_, Pct_concordance = NA_real_, IC_inf = NA_real_, IC_sup = NA_real_, stringsAsFactors = FALSE))
+    ligne_accord(o, N, sum(tous_egaux(M)))
+  }))
+  # 2. opérateur contre la norme : tous les essais de l'opérateur d'accord avec la norme
+  vs <- do.call(rbind, lapply(noms_op, function(o) {
+    M <- par_op[[o]]
+    ligne_accord(o, N, sum(vapply(seq_len(N), function(i) all(M[i, ] == r0[i]), logical(1))))
+  }))
+  # 3. entre opérateurs : tous les essais de tous les opérateurs identiques
+  entre <- NULL
+  if (length(noms_op) >= 2) entre <- ligne_accord("Tous les opérateurs", N, sum(tous_egaux(E)))
+  # 4. tous les opérateurs et la norme
+  tous_norme <- ligne_accord("Tous les opérateurs / norme", N, sum(vapply(seq_len(N), function(i) all(E[i, ] == r0[i]), logical(1))))
+
+  # Kappas
+  kv <- lapply(noms_op, function(o) kappa_vs_norme(r0, par_op[[o]])); names(kv) <- noms_op
+  tab_kv <- do.call(rbind, lapply(noms_op, function(o) {
+    k <- kv[[o]]
+    data.frame(Operateur = o, Reponse = c("Globale", k$niveaux), Kappa = c(k$kappa, k$kj),
+               Verdict = vapply(c(k$kappa, k$kj), verdict_kappa, ""), stringsAsFactors = FALSE)
+  }))
+  kt <- kappa_vs_norme(r0, E)
+  tab_kt <- data.frame(Operateur = "Tous les opérateurs", Reponse = c("Globale", kt$niveaux), Kappa = c(kt$kappa, kt$kj),
+                       Verdict = vapply(c(kt$kappa, kt$kj), verdict_kappa, ""), stringsAsFactors = FALSE)
+  tab_kv <- rbind(tab_kv, tab_kt)
+  tab_fi <- do.call(rbind, lapply(noms_op, function(o) if (ncol(par_op[[o]]) >= 2) tab_fleiss(o, kappa_fleiss(par_op[[o]])) else NULL))
+  tab_fe <- if (length(noms_op) >= 2) tab_fleiss("Tous les opérateurs", kappa_fleiss(E)) else NULL
+
+  # Figure : pourcentages de concordance et intervalles de confiance exacts
+  fig <- lire_png("kappa_operateurs.png", largeur = 1000, hauteur = 520)
+  par(mfrow = c(1, 2), mar = c(6, 4.5, 3, 1), oma = c(1.5, 0, 0, 0))
+  trace_ic <- function(tb, titre) {
+    k <- nrow(tb); ok2 <- is.finite(tb$Pct_concordance)
+    plot(NA, xlim = c(0.5, k + 0.5), ylim = c(0, 100), xaxt = "n", xlab = "", ylab = "Concordance (%)", main = titre)
+    axis(1, at = seq_len(k), labels = tb$Operateur, las = 2, cex.axis = 0.85)
+    abline(h = 90, lty = 2, col = "#2e8b57"); abline(h = 70, lty = 3, col = "#b03030")
+    if (any(ok2)) {
+      arrows(which(ok2), tb$IC_inf[ok2], which(ok2), tb$IC_sup[ok2], angle = 90, code = 3, length = 0.06, lwd = 2, col = "#2a5d9f")
+      points(which(ok2), tb$Pct_concordance[ok2], pch = 19, cex = 1.3, col = "#2a5d9f")
+    }
+  }
+  trace_ic(intra, "Intra-opérateur")
+  tn <- tous_norme; tn$Operateur <- "Tous"
+  trace_ic(rbind(vs, tn), "Opérateur / norme")
+  mtext("Pointillés : 90 % (acceptable) et 70 % (limite basse)", side = 1, outer = TRUE, line = -1.2, cex = 0.8)
+  invisible(dev.off())
+
+  ren <- function(df) {                          # en-têtes prêts à l'affichage (tables_libres)
+    cv <- c(Operateur = "Opérateur", Pct_concordance = "Concordance (%)", IC_inf = "IC inf. (%)", IC_sup = "IC sup. (%)", Reponse = "Réponse", p_value = "p-value")
+    i <- names(df) %in% names(cv); names(df)[i] <- cv[names(df)[i]]; df
+  }
+  tables <- list(`Intra-opérateur (répétabilité)` = ren(intra),
+                 `Évaluation par opérateur (opérateur / norme)` = ren(vs))
+  if (!is.null(entre)) tables$`Entre opérateurs` <- ren(entre)
+  tables$`Tous les opérateurs et la norme` <- ren(tous_norme)
+  tables$`Kappa de Cohen — opérateurs contre la norme (essais cumulés)` <- ren(tab_kv)
+  if (!is.null(tab_fi) && nrow(tab_fi)) tables$`Kappa de Fleiss — intra-opérateur` <- ren(tab_fi)
+  if (!is.null(tab_fe)) tables$`Kappa de Fleiss — entre opérateurs` <- ren(tab_fe)
+  lignes <- c(sprintf("Norme : « %s » — %d pièce(s) évaluée(s) — opérateurs : %s", rn, N,
+                      paste0(noms_op, " (", essais, " essai", ifelse(essais > 1, "s", ""), ")", collapse = ", ")),
+              sprintf("Intervalles de confiance exacts (loi binomiale) à %s.", conf_txt()),
+              "Concordance intra-opérateur : tous les essais d'un opérateur donnent la même réponse pour la pièce.",
+              "Opérateur / norme : tous les essais de l'opérateur concordent avec la norme.",
+              "Entre opérateurs : tous les essais de tous les opérateurs donnent la même réponse.",
+              "Tous les opérateurs et la norme : tous les essais de tous les opérateurs concordent avec la norme.", "",
+              sprintf("%s : %s %% de concordance avec la norme (%d pièces sur %d)", vs$Operateur, fmt(round(vs$Pct_concordance, 1)), vs$Concordances, vs$Inspections),
+              sprintf("Tous les opérateurs et la norme : %s %% (%d pièces sur %d)", fmt(round(tous_norme$Pct_concordance, 1)), tous_norme$Concordances, tous_norme$Inspections),
+              "", KAPPA_REFERENCES)
+  avert <- list("Kappa non pondéré ; la valeur dépend de la prévalence des catégories. Pour un système de mesure, AIAG retient généralement une concordance d'au moins 90 % et un Kappa supérieur à 0,75.",
+                "Le Kappa de Fleiss compare les essais entre eux (écart-type sous H0 : Kappa = 0 ; p-value unilatérale) ; le Kappa contre la norme est un Kappa de Cohen sur les essais cumulés de l'opérateur, sans p-value.")
+  if (ecartees > 0) avert <- c(avert, list(sprintf("%d pièce(s) écartée(s) : référence absente ou évaluation manquante.", ecartees)))
+  if (N < 30) avert <- c(avert, list("Moins de 30 pièces : les intervalles de confiance sont larges, interpréter avec prudence."))
+  if (length(unique(essais)) > 1) avert <- c(avert, list("Les opérateurs n'ont pas le même nombre d'essais : les pourcentages ne sont pas strictement comparables."))
+  list(titre = sprintf("Évaluation par opérateur et norme — Kappa de Cohen / Fleiss — « %s »", rn), lignes = lignes,
+       conclusion = sprintf("Concordance avec la norme : %s ; tous les opérateurs : %s %%.",
+                            paste0(vs$Operateur, " ", fmt(round(vs$Pct_concordance, 1)), " %", collapse = ", "), fmt(round(tous_norme$Pct_concordance, 1))),
+       tables = tables, tables_libres = names(tables), figures = c(fig), avertissements = avert)
+}
+
+# =============================================================================
+#  Étude d'instrumentation d'attribut — méthode analytique
+#  Référence continue connue (pièces), nombre d'acceptations sur n essais : la probabilité d'acceptation est ajustée
+#  en fonction de la référence (régression binomiale, lien probit = loi normale, ou logit = loi logistique, par maximum de vraisemblance).
+#  Valeur de référence acceptée une fois sur deux : x50 ; répétabilité : écart-type de la courbe ; biais : écart entre x50 et la limite de tolérance.
+# =============================================================================
+cmd_attribut_analytique <- function(d, p) {
+  xn <- nom_colonne(d, p$reference, "Valeurs de référence"); kn <- nom_colonne(d, p$acceptations, "Nombre d'acceptations")
+  x <- col_num(d, xn); k <- col_num(d, kn)
+  n <- num(p$essais); lit <- num(p$lit); lst <- num(p$lst)
+  loi <- if (identical(p$loi, "logistique")) "logistique" else "normale"
+  if (is.na(n) || n < 1 || n != round(n)) stop("Saisir le nombre d'essais par pièce (entier ≥ 1).", call. = FALSE)
+  if (is.na(lit) && is.na(lst)) stop("Saisir au moins une limite de tolérance (inférieure ou supérieure).", call. = FALSE)
+  if (!is.na(lit) && !is.na(lst) && lit >= lst) stop("La limite inférieure doit être strictement inférieure à la limite supérieure.", call. = FALSE)
+  ok <- is.finite(x) & is.finite(k)
+  x <- x[ok]; k <- k[ok]
+  if (length(x) < 4) stop("Il faut au moins 4 pièces (valeur de référence et nombre d'acceptations).", call. = FALSE)
+  if (any(k < 0 | k > n | k != round(k))) stop(sprintf("Le nombre d'acceptations doit être un entier compris entre 0 et %d.", as.integer(n)), call. = FALSE)
+  if (length(unique(x)) < 4) stop("Il faut au moins 4 valeurs de référence différentes.", call. = FALSE)
+  part <- k > 0 & k < n
+  if (sum(part) < 2) stop("Il faut au moins 2 pièces avec une acceptation partielle (ni 0, ni toutes les essais) pour ajuster la courbe : choisir des pièces proches de la limite de tolérance.", call. = FALSE)
+  lien <- if (loi == "normale") "probit" else "logit"
+  fit <- suppressWarnings(stats::glm(cbind(k, n - k) ~ x, family = stats::binomial(link = lien)))
+  a <- unname(stats::coef(fit)[1]); b <- unname(stats::coef(fit)[2])
+  V <- stats::vcov(fit)
+  if (!is.finite(b) || abs(b) < 1e-12) stop("La probabilité d'acceptation ne varie pas avec la valeur de référence : ajustement impossible.", call. = FALSE)
+  if (!isTRUE(fit$converged) || max(abs(stats::fitted(fit) - k / n)) > 0.5)
+    stop("L'ajustement n'a pas convergé (séparation presque parfaite) : ajouter des pièces avec une acceptation partielle.", call. = FALSE)
+  fpa <- function(v) if (loi == "normale") stats::pnorm(a + b * v) else stats::plogis(a + b * v)
+  x50 <- -a / b
+  sigma <- if (loi == "normale") 1 / abs(b) else pi / (sqrt(3) * abs(b))
+  var_x50 <- V[1, 1] / b^2 + a^2 * V[2, 2] / b^4 - 2 * a * V[1, 2] / b^3
+  se_x50 <- sqrt(max(var_x50, 0))
+  croissante <- b > 0                               # acceptation de plus en plus fréquente quand la valeur de référence augmente : limite inférieure
+  lim <- if (croissante) lit else lst
+  cote <- if (croissante) "inférieure" else "supérieure"
+  if (is.na(lim)) stop(sprintf("L'acceptation augmente avec la référence (%s) : saisir la limite de tolérance %s.", if (croissante) "croissante" else "décroissante", cote), call. = FALSE)
+  biais <- if (croissante) lim - x50 else x50 - lim   # > 0 : le système accepte des pièces hors tolérance
+  zb <- biais / se_x50
+  pb <- 2 * stats::pnorm(-abs(zb))
+  zq <- stats::qnorm(1 - ALPHA / 2)
+  pa_lim <- fpa(lim)
+  pa_lit <- if (is.na(lit)) NA_real_ else fpa(lit); pa_lst <- if (is.na(lst)) NA_real_ else fpa(lst)
+  tol <- if (!is.na(lit) && !is.na(lst)) lst - lit else NA_real_
+  dev <- stats::deviance(fit); ddl <- stats::df.residual(fit)
+  p_dev <- if (ddl > 0) stats::pchisq(dev, ddl, lower.tail = FALSE) else NA_real_
+  obs <- data.frame(Reference = x, Essais = as.integer(n), Acceptations = as.integer(k), Pa_observee = k / n, Pa_ajustee = fpa(x))
+  obs <- obs[order(obs$Reference), ]
+  names(obs) <- c("Référence", "Essais", "Acceptations", "Pa observée", "Pa ajustée")
+  ind <- data.frame(Indicateur = c("Pièces", "Essais par pièce", "Limite de tolérance retenue", "Référence acceptée une fois sur deux (x50)",
+                                   "Erreur standard de x50", "Biais (limite − x50)", "Répétabilité : écart-type de la courbe (σ)", "Intervalle de répétabilité (6 σ)",
+                                   "Probabilité d'acceptation à la limite de tolérance"),
+                    Valeur = c(length(x), n, lim, x50, se_x50, biais, sigma, 6 * sigma, pa_lim), stringsAsFactors = FALSE)
+  if (!is.na(tol)) ind <- rbind(ind, data.frame(Indicateur = c("Répétabilité en % de la tolérance (6 σ / tolérance)", "Biais en % de la tolérance"),
+                                                Valeur = c(100 * 6 * sigma / tol, 100 * biais / tol), stringsAsFactors = FALSE))
+  ic_b <- biais + c(-1, 1) * zq * se_x50
+  rej <- pb < ALPHA
+  fig <- lire_png("attribut_analytique.png", largeur = 900, hauteur = 600)
+  par(mar = c(4.8, 4.8, 3.2, 1))
+  xl <- range(c(x, lit, lst, x50), na.rm = TRUE); marge <- diff(xl) * 0.12; xs <- seq(xl[1] - marge, xl[2] + marge, length.out = 300)
+  plot(xs, fpa(xs), type = "l", lwd = 2, col = "#2a5d9f", ylim = c(0, 1), xlab = "Valeur de référence", ylab = "Probabilité d'acceptation (Pa)",
+       main = "Courbe de performance du système de mesure par attributs")
+  grid(col = "#e5e5e5")
+  points(x, k / n, pch = 19, cex = 1.3, col = "#444444")
+  abline(h = 0.5, lty = 3, col = "#888888")
+  abline(v = c(lit, lst), lty = 2, lwd = 2, col = "#b03030")
+  abline(v = x50, lty = 1, col = "#2e8b57"); points(lim, pa_lim, pch = 17, cex = 1.4, col = "#b03030")
+  legend("topleft", bty = "n", cex = 0.85, pch = c(19, NA, NA, 17), lty = c(NA, 1, 2, NA), lwd = c(NA, 2, 2, NA),
+         col = c("#444444", "#2a5d9f", "#b03030", "#b03030"),
+         legend = c("Pa observée", sprintf("Pa ajustée (loi %s)", loi), "Limites de tolérance", sprintf("Pa à la limite : %s", fmt(pa_lim, 3))))
+  legend("bottomright", bty = "n", cex = 0.85, lty = 1, col = "#2e8b57", legend = sprintf("x50 = %s", fmt(x50, 4)))
+  invisible(dev.off())
+  lignes <- c("H0 : le biais est nul (la valeur de référence acceptée une fois sur deux est la limite de tolérance) ; H1 : le biais est non nul.",
+              regle(),
+              sprintf("Modèle : probabilité d'acceptation ajustée par régression binomiale (loi %s, maximum de vraisemblance) sur %d pièces, %d essais chacune.", loi, length(x), as.integer(n)),
+              sprintf("Limite de tolérance retenue : %s (%s) = %s", cote, if (croissante) "l'acceptation augmente avec la référence" else "l'acceptation diminue quand la référence augmente", fmt(lim)),
+              sprintf("x50 (acceptée une fois sur deux) = %s (erreur standard %s)", fmt(x50, 6), fmt(se_x50, 4)),
+              sprintf("Biais = %s ; intervalle de confiance à %s : [%s ; %s] ; test z : z = %s, p-value %s", fmt(biais, 5), conf_txt(), fmt(ic_b[1], 4), fmt(ic_b[2], 4), fmt(zb, 4), fmt_p(pb)),
+              decision(pb, "le biais n'est pas significatif.", "le biais est statistiquement significatif."),
+              sprintf("Répétabilité : σ = %s ; intervalle de répétabilité 6 σ = %s%s", fmt(sigma, 5), fmt(6 * sigma, 5),
+                      if (is.na(tol)) "" else sprintf(" (%s %% de la tolérance)", fmt(100 * 6 * sigma / tol, 4))),
+              sprintf("Probabilité d'acceptation à la limite %s : %s", cote, fmt(pa_lim, 4)),
+              sprintf("Adéquation du modèle (déviance) : %s, %d ddl, p-value %s", fmt(dev, 4), ddl, fmt_p(p_dev)))
+  if (biais > 0) lignes <- c(lignes, "Biais positif : le système accepte des pièces situées au-delà de la limite de tolérance.")
+  else lignes <- c(lignes, "Biais négatif : le système rejette des pièces situées dans la tolérance.")
+  avert <- list("Méthode analytique : la courbe est estimée à partir des pièces dont la référence est connue ; elle suppose une loi normale (ou logistique) de la zone d'incertitude du système de mesure et n'est valable qu'au voisinage de la limite étudiée.",
+                "Conventions propres à ce programme (régression binomiale par maximum de vraisemblance) : les valeurs peuvent différer légèrement de celles d'un autre logiciel qui ajuste la droite sur les scores normaux (AIAG, Minitab).",
+                "Le test du biais est un test de Wald sur x50 (approximation normale) ; il suppose une courbe bien ajustée (voir la déviance) et suffisamment de pièces proches de la limite.")
+  if (sum(part) < 4) avert <- c(avert, list("Moins de 4 pièces avec une acceptation partielle : l'estimation est peu précise ; on recommande de 6 à 8 pièces réparties de part et d'autre de la limite."))
+  if (is.finite(p_dev) && p_dev < ALPHA) avert <- c(avert, list("La déviance indique un ajustement insuffisant : la loi choisie ne décrit peut-être pas bien les données (essayer la loi logistique)."))
+  list(titre = "Instrumentation d'attribut — méthode analytique", lignes = lignes,
+       conclusion = sprintf("Biais = %s (p-value %s) ; répétabilité σ = %s ; Pa à la limite %s = %s.", fmt(biais, 4), fmt_p(pb), fmt(sigma, 4), cote, fmt(pa_lim, 3)),
+       tables = list(Indicateurs = ind, `Données et ajustement` = obs), tables_libres = "Données et ajustement", figures = c(fig), avertissements = avert)
+}
+
+# =============================================================================
+#  Test d'équivalence (TOST : deux tests unilatéraux) — un échantillon, deux échantillons indépendants, échantillons appariés
+#  La différence δ (moyenne − cible ; moyenne test − moyenne référence ; moyenne des différences) doit se trouver dans l'intervalle d'équivalence.
+#  H0 : δ ≤ limite inférieure ou δ ≥ limite supérieure ; H1 : limite inférieure < δ < limite supérieure.
+#  Équivalence démontrée si les deux p-values sont < α, soit si l'intervalle de confiance à 100 (1 − 2α) % est dans l'intervalle d'équivalence.
+# =============================================================================
+cmd_equivalence <- function(d, p) {
+  mode <- if (p$mode %in% c("un", "deux", "apparie")) p$mode else "deux"
+  xn <- nom_colonne(d, p$x, if (mode == "un") "Série" else "Série test (X)")
+  x <- col_num(d, xn)
+  yn <- NULL; y <- NULL
+  if (mode != "un") { yn <- nom_colonne(d, p$y, "Série de référence (Y)"); y <- col_num(d, yn) }
+  if (identical(p$intervalle, "asym")) { lo <- num(p$lim_inf); hi <- num(p$lim_sup) }
+  else { m <- num(p$marge); lo <- -m; hi <- m }
+  if (is.na(lo) || is.na(hi)) stop("Saisir les limites de l'intervalle d'équivalence (ou la marge).", call. = FALSE)
+  if (lo >= hi) stop("La limite inférieure d'équivalence doit être strictement inférieure à la limite supérieure.", call. = FALSE)
+  cible <- 0
+  if (mode == "un") {
+    cible <- num(p$cible); if (is.na(cible)) cible <- 0
+    xc <- sans_na(x)
+    if (length(xc) < 2) stop("Il faut au moins 2 valeurs.", call. = FALSE)
+    n <- length(xc); dif <- mean(xc) - cible; se <- stats::sd(xc) / sqrt(n); ddl <- n - 1
+    type <- "un échantillon"; cols <- xn
+    sujet <- sprintf("δ = moyenne de « %s » − %s", xn, fmt(cible))
+    clas <- stats::t.test(xc, mu = cible)
+  } else if (mode == "apparie") {
+    if (length(x) != length(y)) stop("Pour des échantillons appariés, les deux séries doivent avoir la même longueur.", call. = FALSE)
+    ok <- is.finite(x) & is.finite(y); dd <- (x - y)[ok]; n <- length(dd)
+    if (n < 2) stop("Il faut au moins 2 paires complètes.", call. = FALSE)
+    dif <- mean(dd); se <- stats::sd(dd) / sqrt(n); ddl <- n - 1
+    type <- "échantillons appariés"; cols <- c(xn, yn)
+    sujet <- sprintf("δ = moyenne des différences (« %s » − « %s »)", xn, yn)
+    clas <- stats::t.test(dd, mu = 0)
+  } else {
+    xc <- sans_na(x); yc <- sans_na(y)
+    if (length(xc) < 2 || length(yc) < 2) stop("Il faut au moins 2 valeurs dans chaque série.", call. = FALSE)
+    n1 <- length(xc); n2 <- length(yc); v1 <- stats::var(xc); v2 <- stats::var(yc)
+    dif <- mean(xc) - mean(yc)
+    if (vrai(p$variances_egales)) {
+      sp2 <- ((n1 - 1) * v1 + (n2 - 1) * v2) / (n1 + n2 - 2); se <- sqrt(sp2 * (1 / n1 + 1 / n2)); ddl <- n1 + n2 - 2
+      type <- "deux échantillons (variances supposées égales)"
+    } else {
+      se <- sqrt(v1 / n1 + v2 / n2); ddl <- (v1 / n1 + v2 / n2)^2 / ((v1 / n1)^2 / (n1 - 1) + (v2 / n2)^2 / (n2 - 1))
+      type <- "deux échantillons indépendants (Welch)"
+    }
+    n <- n1 + n2; cols <- c(xn, yn)
+    sujet <- sprintf("δ = moyenne de « %s » − moyenne de « %s »", xn, yn)
+    clas <- stats::t.test(xc, yc, var.equal = vrai(p$variances_egales))
+  }
+  if (!is.finite(se) || se <= 0) stop("Les données sont constantes : le test n'est pas calculable.", call. = FALSE)
+  t1 <- (dif - lo) / se; t2 <- (dif - hi) / se
+  p1 <- stats::pt(t1, ddl, lower.tail = FALSE); p2 <- stats::pt(t2, ddl, lower.tail = TRUE)
+  pv <- max(p1, p2)
+  tq <- stats::qt(1 - ALPHA, ddl); ic <- dif + c(-1, 1) * tq * se
+  eq <- pv < ALPHA
+  niv2 <- pct_txt(1 - 2 * ALPHA)
+  tab_t <- data.frame(Test = c(sprintf("Inférieur : H0 δ ≤ %s", fmt(lo)), sprintf("Supérieur : H0 δ ≥ %s", fmt(hi))),
+                      Statistique_t = c(t1, t2), ddl = c(ddl, ddl), p_value = c(p1, p2),
+                      Decision = c(if (p1 < ALPHA) "H0 rejetée" else "H0 non rejetée", if (p2 < ALPHA) "H0 rejetée" else "H0 non rejetée"),
+                      stringsAsFactors = FALSE)
+  names(tab_t) <- c("Test unilatéral", "Statistique t", "ddl", "p-value", "Décision")
+  tab_s <- if (mode == "apparie") {
+    data.frame(Serie = c(cols, "Différences"), n = n, Moyenne = c(mean(x[ok]), mean(y[ok]), mean(dd)),
+               Ecart_type = c(stats::sd(x[ok]), stats::sd(y[ok]), stats::sd(dd)), stringsAsFactors = FALSE)
+  } else lignes_stat(d, cols)
+  fig <- lire_png("equivalence.png", largeur = 900, hauteur = 430)
+  par(mar = c(4.5, 2, 3.2, 1))
+  xl <- range(c(lo, hi, ic, dif, 0)); mg <- diff(xl) * 0.15; xl <- xl + c(-mg, mg)
+  plot(NA, xlim = xl, ylim = c(0, 1), yaxt = "n", ylab = "", xlab = "Différence δ",
+       main = sprintf("Test d'équivalence : intervalle de confiance à %s et limites d'équivalence", niv2), cex.main = 0.95)
+  rect(lo, 0.05, hi, 0.95, col = "#e3f1e6", border = NA)
+  abline(v = c(lo, hi), lty = 2, lwd = 2, col = "#2e8b57"); abline(v = 0, lty = 3, col = "#888888")
+  arrows(ic[1], 0.5, ic[2], 0.5, angle = 90, code = 3, length = 0.12, lwd = 3, col = if (eq) "#2a5d9f" else "#b03030")
+  points(dif, 0.5, pch = 19, cex = 1.6, col = if (eq) "#2a5d9f" else "#b03030")
+  text(c(lo, hi), 0.97, c(fmt(lo, 4), fmt(hi, 4)), col = "#2e8b57", cex = 0.85, pos = c(2, 4), xpd = NA)
+  text(dif, 0.62, fmt(dif, 4), cex = 0.9)
+  legend("bottomright", bty = "n", cex = 0.85, lty = c(NA, 1, 2), pch = c(19, NA, NA), lwd = c(NA, 3, 2), col = c("#444444", "#2a5d9f", "#2e8b57"),
+         legend = c("Différence estimée", sprintf("IC à %s", niv2), "Limites d'équivalence"))
+  invisible(dev.off())
+  conc <- if (eq) sprintf("Équivalence démontrée : l'intervalle de confiance à %s [%s ; %s] est dans [%s ; %s].", niv2, fmt(ic[1], 4), fmt(ic[2], 4), fmt(lo, 4), fmt(hi, 4))
+          else sprintf("Équivalence non démontrée : l'intervalle de confiance à %s [%s ; %s] n'est pas entièrement dans [%s ; %s].", niv2, fmt(ic[1], 4), fmt(ic[2], 4), fmt(lo, 4), fmt(hi, 4))
+  lignes <- c(sprintf("Test d'équivalence (TOST) — %s ; %s", type, sujet),
+              sprintf("Intervalle d'équivalence : [%s ; %s]", fmt(lo), fmt(hi)),
+              sprintf("H0 : δ ≤ %s ou δ ≥ %s (différence hors de l'intervalle) ; H1 : %s < δ < %s (équivalence).", fmt(lo), fmt(hi), fmt(lo), fmt(hi)),
+              sprintf("Règle de décision (risque α = %s) : les deux tests unilatéraux doivent rejeter H0, soit p-value (la plus grande des deux) < α.", alpha_txt()),
+              sprintf("Différence estimée δ = %s ; erreur standard = %s ; ddl = %s", fmt(dif, 5), fmt(se, 4), fmt(ddl, 4)),
+              sprintf("Intervalle de confiance à %s (100 (1 − 2 α) %%) : [%s ; %s]", niv2, fmt(ic[1], 5), fmt(ic[2], 5)),
+              sprintf("p-value du test d'équivalence : %s", fmt_p(pv)),
+              decision(pv, "l'équivalence n'est pas démontrée.", "l'équivalence est démontrée (la différence est comprise dans l'intervalle d'équivalence)."),
+              sprintf("Pour information, test t classique (H0 : δ = %s) : p-value %s — une différence non significative ne prouve pas l'équivalence.", fmt(if (mode == "un") cible else 0), fmt_p(clas$p.value)))
+  avert <- list("L'intervalle d'équivalence est un choix de l'utilisateur (écart jugé sans importance en pratique) : il doit être fixé avant l'analyse.",
+                "Le TOST est conservateur ; il suppose l'indépendance des observations et des distributions approximativement normales (voir le test de normalité).")
+  if (mode == "un" && n < 10 || mode == "apparie" && n < 10 || mode == "deux" && min(n1, n2) < 10)
+    avert <- c(avert, list("Peu de mesures : la puissance du test d'équivalence est faible, une conclusion proche des limites est fragile."))
+  if (lo > 0 || hi < 0) avert <- c(avert, list("L'intervalle d'équivalence ne contient pas 0 : vérifier les limites saisies."))
+  list(titre = paste("Test d'équivalence —", type), lignes = lignes, conclusion = conc,
+       tables = list(Series = tab_s, `Tests unilatéraux (TOST)` = tab_t), tables_libres = c("Tests unilatéraux (TOST)"), figures = c(fig), avertissements = avert)
 }

@@ -662,6 +662,7 @@ lancer_commande <- function(d, p) {
          z = avancee("cmd_z", d, p), poisson = avancee("cmd_poisson", d, p), estimation = avancee("cmd_estimation", d, p),
          identification = avancee("cmd_identification", d, p), correlation = avancee("cmd_correlation", d, p),
          regression = avancee("cmd_regression", d, p), carte_attributs = avancee("cmd_carte_attributs", d, p), graphique = avancee("cmd_graphique", d, p), serie = avancee("cmd_serie", d, p),
+         kappa_operateurs = avancee("cmd_kappa_operateurs", d, p), attribut_analytique = avancee("cmd_attribut_analytique", d, p), equivalence = avancee("cmd_equivalence", d, p),
          stop("Commande inconnue : ", p$commande, call. = FALSE))
 }
 
