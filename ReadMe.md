@@ -1,6 +1,6 @@
-# Statistiques — Raspberry Pi 5 + Samsung S23
+# Statistiques — Raspberry Pi 5, Samsung S23 et Windows
 
-Programme de statistiques du Pi 5, utilisable de 4 façons : application de bureau sur le Pi, bot Telegram depuis le S23, interface web Shiny depuis le Pi ou depuis le S23. Les calculs sont réalisés par **R** ; l'application de bureau et le bot sont en **Python**.
+Programme de statistiques du Pi 5, utilisable de 4 façons : application de bureau sur le Pi, bot Telegram depuis le S23, interface web Shiny depuis le Pi ou depuis le S23. L'application de bureau fonctionne aussi **sous Windows**, y compris sans installation ni droits d'administrateur (voir « Version Windows »). Les calculs sont réalisés par **R** ; l'application de bureau et le bot sont en **Python**.
 
 - Dossier du projet : `/home/jfbrunet/Projects/Statistiques`
 - Dossier du bot Telegram : `/home/jfbrunet/Projects/Telegram`
@@ -27,6 +27,8 @@ Programme de statistiques du Pi 5, utilisable de 4 façons : application de bure
 | `app.R`                        | Interface web Shiny, facultative (voir plus bas) ; elle appelle `cli_statistique.R` et `commandes_avancees.R`, qui doivent rester dans le même dossier                                                                                                                                                                                                                                   |
 | `Statistiques.desktop`         | Lanceur pour le bureau (non versionné : il reste sur le bureau du Pi)                                                                                                                                                                                                                                                                                                                    |
 | `vocabulaire.txt`              | Glossaire (« Terme : définition », une entrée par ligne), à compléter au fur et à mesure ; lu par l'application de bureau, l'interface web et le bot                                                                                                                                                                                                                                     |
+| `statistiques.spec`            | Description de la construction de l'exécutable Windows (PyInstaller)                                                                                                                                                                                                                                                                                                                     |
+| `construire_windows.bat`       | Script Windows : construit l'exécutable puis copie les fichiers de données à côté de lui                                                                                                                                                                                                                                                                                                 |
 | `icons/6Sigma.png`             | Icône de l'écran d'accueil et du lanceur                                                                                                                                                                                                                                                                                                                                                 |
 
 ## Fonctionnalités
@@ -127,6 +129,62 @@ Selon le gestionnaire de fichiers, un clic droit sur l'icône puis « Autoriser 
 Utilisation : onglet **Données** pour saisir/coller des données ou ouvrir un fichier, puis un onglet par analyse. La fenêtre s'ouvre agrandie ; le séparateur entre le texte des résultats et les graphiques se déplace à la souris, et un clic sur un graphique l'ouvre en grand. Chaque résultat peut être enregistré (texte, avec les graphiques PNG à côté) ou copié dans le presse-papiers par « Copier le résultat » (texte, tableaux et remarques), dans tous les onglets d'analyse ; « Copier les tableaux (tableur) » copie les seuls tableaux, séparés par des tabulations, nombres à pleine précision et virgule décimale, pour les coller directement dans LibreOffice Calc ou Excel. Les options de lecture (séparateur, décimale, ligne de noms de colonnes) sont en mode automatique par défaut et peuvent être forcées. L'onglet **Rapport** garde le journal des analyses (double-clic ou « Revoir l'analyse sélectionnée » pour réafficher un résultat dans son onglet), enregistre ou rouvre un projet et génère le rapport PDF ; il décrit les données actuellement chargées, chaque analyse portant sur les données au moment de son calcul.
 
 Les fichiers `.R` sont appelés par `Rscript` : ils n'ont pas besoin du droit d'exécution (`chmod +x`), contrairement aux `.py` lancés directement.
+
+## Version Windows
+
+L'application de bureau fonctionne sous Windows 10 et 11. Les calculs restent faits par R, mais **RStudio n'est pas nécessaire** : seuls `Rscript` et le package `jsonlite` sont utilisés. Le bot Telegram et l'interface Shiny ne font pas partie de la version Windows.
+
+Le programme cherche R dans cet ordre : dossier `R-portable` (ou `R`) à côté du programme, `PATH`, puis `C:\Program Files\R\R-*` (version la plus récente).
+
+### Utilisation avec Python installé
+
+1. Installer Python 3.12 ou plus récent en cochant « tcl/tk and IDLE ».
+2. Installer R 4.2 ou plus récent, puis, dans R : `install.packages("jsonlite")`.
+3. Placer dans un même dossier : `statistiques.py`, `rapport_statistique.py`, les trois fichiers `.R`, les dossiers `icons` et `illustrations` (et `vocabulaire.txt` s'il existe).
+4. Installer les paquets Python, puis lancer :
+
+   ```
+   py -m pip install pillow reportlab openpyxl
+   py statistiques.py
+   ```
+
+Pour le rapport PDF, la police DejaVu est utilisée si les fichiers `DejaVuSans.ttf`, `DejaVuSans-Bold.ttf` et `DejaVuSans-Oblique.ttf` sont dans un dossier `fonts` à côté du programme ; sinon Arial est utilisée (quelques symboles sont alors remplacés).
+
+### Version sans installation, sans droits d'administrateur
+
+Principe : un dossier autonome `Statistiques` (exécutable, R embarqué, fichiers du programme) qui se copie dans un dossier de l'utilisateur ou sur une clé USB et se lance par double-clic. Il se prépare une fois, sur un poste où l'on peut installer Python.
+
+**Préparation du dossier de travail** (par exemple `C:\BrunetJF\Statistiques`) :
+
+1. Y mettre les fichiers du projet : `statistiques.py`, `rapport_statistique.py`, `statistiques.spec`, `construire_windows.bat`, les trois fichiers `.R`, `icons\`, `illustrations\`, et si besoin `vocabulaire.txt` et `fonts\`.
+2. Installer Python 3.12 ou 3.13 (installation « pour moi seulement », avec « tcl/tk and IDLE »). PyInstaller ne gère pas toujours les versions de Python les plus récentes : si besoin, adapter la ligne `set PY=py -3.13` de `construire_windows.bat`.
+3. Créer `R-portable` : copier le dossier d'installation de R (par exemple `C:\Program Files\R\R-4.6.0`) vers `C:\BrunetJF\Statistiques\R-portable`.
+4. Installer `jsonlite` **dans cette copie** : sans l'option `lib`, R l'installe dans le profil de l'utilisateur, qui n'existera pas sur les autres postes.
+
+   ```
+   C:\BrunetJF\Statistiques\R-portable\bin\Rscript.exe -e "install.packages('jsonlite', lib='C:/BrunetJF/Statistiques/R-portable/library', repos='https://cloud.r-project.org')"
+   ```
+
+5. Vérifier que R embarqué trouve `jsonlite` sans l'aide du profil (PowerShell) :
+
+   ```
+   $env:R_LIBS_USER = "C:\dossier_inexistant"
+   C:\BrunetJF\Statistiques\R-portable\bin\Rscript.exe --vanilla -e "library(jsonlite); cat('OK', find.package('jsonlite'), '\n')"
+   ```
+
+   Le chemin affiché doit se trouver dans `R-portable\library`.
+
+**Construction** : double-cliquer sur `construire_windows.bat`. Il installe PyInstaller, construit l'exécutable et copie les fichiers de données (`.R`, `icons`, `illustrations`, `fonts`, `vocabulaire.txt`, `R-portable`) dans `dist\Statistiques\`.
+
+**Diffusion** : copier le dossier `dist\Statistiques` **en entier** (le sous-dossier `_internal` est indispensable), de préférence sous forme de fichier zip. Sur le poste cible : si le zip a été téléchargé, clic droit > Propriétés > « Débloquer », puis extraire dans un dossier de l'utilisateur (Documents, Bureau) et lancer `Statistiques.exe`. Les fichiers `.R`, `icons`, `illustrations` et `vocabulaire.txt` restent modifiables à côté de l'exécutable.
+
+**Points de blocage possibles en entreprise** :
+
+- SmartScreen ou antivirus (exécutable non signé) : « Informations complémentaires » > « Exécuter quand même », ou demander une autorisation à l'informatique ; la signature de l'exécutable par un certificat de signature de code supprime l'avertissement.
+- Règles de restriction d'exécution (AppLocker, par exemple) : essayer un autre dossier ou demander une exception pour le dossier du programme.
+- Le premier calcul est un peu plus long (démarrage de R).
+
+Le bouton « Copier image » passe par PowerShell sous Windows ; « Enregistrer image… » reste disponible en cas d'échec. R est distribué sous licence GPL : conserver son dossier tel quel.
 
 ## Bot Telegram
 
@@ -334,6 +392,6 @@ L'application n'a pas d'authentification : l'arrêter avec `statweb_stop` quand 
 
 ## Limites de cette version
 
-Pas de gestion de comptes, pas de R&R par la méthode des moyennes et étendues, pas de R&R sur plan déséquilibré (croisée ou emboîtée), pas d'ANOVA à plus de six facteurs ni de modèle à effets aléatoires, emboîtés ou à covariables (hors R&R). 
+La version Windows ne comprend que l'application de bureau (ni bot, ni Shiny). Pas de gestion de comptes, pas de R&R par la méthode des moyennes et étendues, pas de R&R sur plan déséquilibré (croisée ou emboîtée), pas d'ANOVA à plus de six facteurs ni de modèle à effets aléatoires, emboîtés ou à covariables (hors R&R). 
 Les projets (`.statproj`), le journal des résultats et le rapport PDF sont propres à l'application de bureau ; les analyses ajoutées depuis (Test Z, Poisson, estimation, identification de loi, régression, séries, cartes p/u, graphiques), la génération de données et les illustrations existent aussi dans l'interface web, et pour la plupart dans le bot.
 L'interface Shiny a sa propre base SQLite et ne produit pas de rapport PDF. Le bot Telegram ne conserve rien sur disque. Le Kappa par opérateur et la méthode analytique d'instrumentation d'attribut ne sont disponibles que dans l'application de bureau.

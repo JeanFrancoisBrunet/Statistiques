@@ -6,18 +6,22 @@
 #  Contenu du rapport : titre, auteur, date ; conclusions saisies ; synthèse des analyses ;
 #  description des données ; détail de chaque analyse (résultats, tableaux, graphiques, remarques).
 #
-#  Dépendance : reportlab  (sudo apt install -y python3-reportlab)
-#  Polices    : DejaVu (paquet fonts-dejavu-core, présent par défaut sur Raspberry Pi OS) ;
-#               à défaut, polices standard du PDF (quelques symboles sont alors remplacés).
+#  Dépendance : reportlab  (Linux : sudo apt install -y python3-reportlab ; Windows : pip install reportlab)
+#  Polices    : DejaVu (Linux : paquet fonts-dejavu-core ; Windows : dossier « fonts » à côté du programme) ;
+#               à défaut Arial (Windows), puis polices standard du PDF (quelques symboles sont alors remplacés).
 #  Ce module ne dépend pas de statistiques.py : il reçoit des données déjà mises en forme.
 #  Auteur : Jean-François BRUNET – JFBConseils – Novembre 2026
 # =============================================================================
 
+import os
 import re
+import sys
 from pathlib import Path
 from xml.sax.saxutils import escape
 
-_DOSSIERS_POLICES = ("/usr/share/fonts/truetype/dejavu", "/usr/share/fonts/dejavu",
+_BASE = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
+_WINFONTS = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
+_DOSSIERS_POLICES = (str(_BASE / "fonts"), "/usr/share/fonts/truetype/dejavu", "/usr/share/fonts/dejavu",
                      "/usr/share/fonts/TTF", "/usr/local/share/fonts")
 _REMPLACEMENTS = {"σ": "sigma", "−": "-", "∞": "inf", "≤": "<=", "≥": ">=", "→": "->", "…": "...", "☑": "[x]", "☐": "[ ]",
                   " ": " ", " ": " "}
@@ -30,6 +34,8 @@ def verifier():
     try:
         import reportlab  # noqa: F401
     except ImportError:
+        if os.name == "nt":
+            return False, "Le paquet Python « reportlab » est absent. Installer : pip install reportlab"
         return False, "Le paquet Python « reportlab » est absent. Installer : sudo apt install -y python3-reportlab"
     return True, "reportlab disponible."
 
@@ -56,6 +62,13 @@ def _polices():
         pdfmetrics.registerFont(TTFont("RapSansI", ital))
         pdfmetrics.registerFontFamily("RapSans", normal="RapSans", bold="RapSansB", italic="RapSansI", boldItalic="RapSansB")
         res = ("RapSans", "RapSansB", "RapSansI", True)
+    elif (_WINFONTS / "arial.ttf").is_file():                      # Windows sans DejaVu : Arial (symboles rares remplacés)
+        a = _WINFONTS
+        pdfmetrics.registerFont(TTFont("RapSans", str(a / "arial.ttf")))
+        pdfmetrics.registerFont(TTFont("RapSansB", str(a / "arialbd.ttf") if (a / "arialbd.ttf").is_file() else str(a / "arial.ttf")))
+        pdfmetrics.registerFont(TTFont("RapSansI", str(a / "ariali.ttf") if (a / "ariali.ttf").is_file() else str(a / "arial.ttf")))
+        pdfmetrics.registerFontFamily("RapSans", normal="RapSans", bold="RapSansB", italic="RapSansI", boldItalic="RapSansB")
+        res = ("RapSans", "RapSansB", "RapSansI", False)
     else:
         res = ("Helvetica", "Helvetica-Bold", "Helvetica-Oblique", False)
     _police_cache["p"] = res

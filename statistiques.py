@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # =============================================================================
-#  Statistiques — Raspberry Pi 5
+#  Statistiques — Raspberry Pi 5 / Linux / Windows
 #  Application de bureau (Tkinter) et cœur partagé avec telegram_bot_statistiques.py.
 #  - Données : saisie / collage de texte, ou fichier (txt, csv, tsv, dat, xlsx)
 #  - Calculs : délégués à R (moteur_statistique.R via cli_statistique.R)
@@ -19,6 +19,9 @@
 #                   reportlab (rapport PDF)                             sudo apt install -y python3-reportlab
 #    Facultatives : openpyxl (lecture des fichiers .xlsx)               pip install openpyxl --break-system-packages
 #                   python3-requests (uniquement pour le bot Telegram)  sudo apt install -y python3-requests
+#  Windows     : Python 3.11+ (avec Tcl/Tk), R >= 4.2 (ou dossier R-portable à côté du programme) avec jsonlite
+#                   pip install pillow reportlab openpyxl      puis, dans R :  install.packages("jsonlite")
+#                   Lancement : python statistiques.py   (ou statistiques.exe une fois empaqueté avec PyInstaller)
 #  Lancement   : python3 statistiques.py
 #  Le bot Telegram importe ce module : tkinter n'est chargé que pour l'interface.
 #  Auteur : Jean-François BRUNET – JFBConseils – Novembre 2026
@@ -43,7 +46,10 @@ import time
 import zipfile
 from pathlib import Path
 
-DOSSIER = Path(__file__).resolve().parent
+EST_WINDOWS = os.name == "nt"
+EXE_GELE = bool(getattr(sys, "frozen", False))      # programme empaqueté (PyInstaller)
+DOSSIER = Path(sys.executable).resolve().parent if EXE_GELE else Path(__file__).resolve().parent
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if EST_WINDOWS else 0   # pas de console noire sous Windows
 ICONE = DOSSIER / "icons" / "6Sigma.png"
 SCRIPT_R = DOSSIER / "cli_statistique.R"
 TITRE = "Statistiques"
@@ -836,19 +842,54 @@ def _nettoyer_temp():
         shutil.rmtree(d, ignore_errors=True)
 
 
+def _version_r(chemin):
+    """Numéro de version d'un dossier R-x.y.z, sous forme de tuple (pour trier)."""
+    return tuple(int(n) for n in re.findall(r"\d+", chemin.parent.parent.name)) if chemin.parent.parent.name.startswith("R-") else (0,)
+
+
+def trouver_rscript():
+    """Chemin de Rscript : R-portable à côté du programme, PATH, puis installations Windows usuelles ; None si absent."""
+    if EST_WINDOWS:
+        for sous in ("R-portable", "R"):
+            for rel in (("bin", "Rscript.exe"), ("bin", "x64", "Rscript.exe")):
+                p = DOSSIER.joinpath(sous, *rel)
+                if p.is_file():
+                    return str(p)
+    rs = shutil.which("Rscript")
+    if rs:
+        return rs
+    if EST_WINDOWS:
+        trouves = []
+        for racine in (os.environ.get("ProgramFiles"), os.environ.get("ProgramFiles(x86)"),
+                       os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs")):
+            if racine:
+                trouves += list(Path(racine).glob("R/R-*/bin/Rscript.exe")) + list(Path(racine).glob("R/R-*/bin/x64/Rscript.exe"))
+        if trouves:
+            return str(max(trouves, key=lambda c: (_version_r(c), "x64" in c.parts)))
+    return None
+
+
+def _aide_installer_r():
+    if EST_WINDOWS:
+        return "Installer R (https://cran.r-project.org) puis, dans R : install.packages(\"jsonlite\"), ou placer un dossier « R-portable » à côté du programme."
+    return "Installer : sudo apt install -y r-base r-cran-jsonlite"
+
+
 def verifier_r():
     """(ok, message) : R et jsonlite sont-ils utilisables ?"""
-    rs = shutil.which("Rscript")
+    rs = trouver_rscript()
     if not rs:
-        return False, "R est introuvable. Installer : sudo apt install -y r-base r-cran-jsonlite"
+        return False, "R est introuvable. " + _aide_installer_r()
     if not SCRIPT_R.is_file() or not (DOSSIER / "moteur_statistique.R").is_file() or not (DOSSIER / "commandes_avancees.R").is_file():
         return False, "cli_statistique.R, moteur_statistique.R ou commandes_avancees.R manquant dans le dossier du programme."
     try:
-        r = subprocess.run([rs, "-e", "library(jsonlite)"], capture_output=True, text=True, timeout=60)
+        r = subprocess.run([rs, "-e", "library(jsonlite)"], capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           timeout=60, stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
     except Exception as e:
         return False, f"R inutilisable : {e}"
     if r.returncode != 0:
-        return False, "Le package R « jsonlite » est absent. Installer : sudo apt install -y r-cran-jsonlite"
+        return False, "Le package R « jsonlite » est absent. " + (
+            "Dans R : install.packages(\"jsonlite\")" if EST_WINDOWS else "Installer : sudo apt install -y r-cran-jsonlite")
     return True, "R prêt."
 
 
@@ -861,19 +902,20 @@ def executer_r(donnees, commande, params, timeout=180, groupe=None):
                                    if donnees.types.get(groupe["colonne"]) == "date" else "")
         params = {**params, "groupes": list(groupe["valeurs"]), "groupe_nom": nom}
         donnees = donnees.avec_groupe(groupe["colonne"], groupe.get("periode"))
-    rs = shutil.which("Rscript")
+    rs = trouver_rscript()
     if not rs:
-        raise ErreurStat("R est introuvable. Installer : sudo apt install -y r-base r-cran-jsonlite")
+        raise ErreurStat("R est introuvable. " + _aide_installer_r())
     dossier = Path(tempfile.mkdtemp(prefix="stat_"))
     _dossiers_temp.append(dossier)
     try:
         donnees.ecrire_csv(dossier / "donnees.csv")
         (dossier / "params.json").write_text(json.dumps({"commande": commande, **params}, ensure_ascii=False), encoding="utf-8")
-        env = dict(os.environ, LC_ALL="C.UTF-8", LANG="C.UTF-8")
+        env = dict(os.environ) if EST_WINDOWS else dict(os.environ, LC_ALL="C.UTF-8", LANG="C.UTF-8")
         debut = time.monotonic()
         try:
             p = subprocess.run([rs, str(SCRIPT_R), str(dossier / "donnees.csv"), str(dossier)],
-                               capture_output=True, text=True, timeout=timeout, env=env)
+                               capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, env=env,
+                               stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
         except subprocess.TimeoutExpired:
             print(f"[R] {commande} : délai dépassé ({time.monotonic() - debut:.1f} s)", file=sys.stderr, flush=True)
             raise ErreurStat("Le calcul R a dépassé le délai autorisé.")
@@ -889,6 +931,17 @@ def executer_r(donnees, commande, params, timeout=180, groupe=None):
     except Exception:
         shutil.rmtree(dossier, ignore_errors=True)
         raise
+
+
+def ouvrir_fichier(chemin):
+    """Ouvre un fichier avec l'application associée du système."""
+    chemin = str(chemin)
+    if EST_WINDOWS:
+        os.startfile(chemin)  # noqa: S606  (Windows uniquement)
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", chemin])
+    else:
+        subprocess.Popen(["xdg-open", chemin], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def lire_nombre(texte, nom="valeur"):
@@ -1441,6 +1494,19 @@ class PanneauGraphiques:
             messagebox.showinfo(TITRE, "Rien à copier : aucune image n'est affichée.")
             return
         src = str(self.figures[self.i])
+        if EST_WINDOWS:
+            try:
+                ps = ("Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; "
+                      "$i=[System.Drawing.Image]::FromFile($env:STAT_IMAGE); [System.Windows.Forms.Clipboard]::SetImage($i); $i.Dispose()")
+                r = subprocess.run(["powershell", "-NoProfile", "-STA", "-Command", ps], timeout=30, env=dict(os.environ, STAT_IMAGE=src),
+                                   stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                   creationflags=NO_WINDOW)
+                if r.returncode != 0:
+                    raise RuntimeError((r.stderr or "échec PowerShell").strip().splitlines()[0])
+                messagebox.showinfo(TITRE, "Image copiée\n\nColler avec Ctrl+V", parent=parent)
+            except Exception as e:
+                messagebox.showerror(TITRE, f"Copie impossible : {e}\n\n« Enregistrer… » crée un fichier PNG à insérer.", parent=parent)
+            return
         for cmd in (["wl-copy", "--type", "image/png"], ["xclip", "-selection", "clipboard", "-t", "image/png"]):
             if shutil.which(cmd[0]):
                 try:
@@ -1876,7 +1942,10 @@ class Application:
         sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
         root.geometry(f"{int(sw * 0.96)}x{int(sh * 0.92)}+{int(sw * 0.02)}+0")   # grande fenêtre, adaptée à l'écran
         try:
-            root.attributes("-zoomed", True)                                      # agrandie au maximum (X11)
+            if EST_WINDOWS:
+                root.state("zoomed")                                              # agrandie au maximum (Windows)
+            else:
+                root.attributes("-zoomed", True)                                  # agrandie au maximum (X11)
         except Exception:
             pass
         root.minsize(860, 600)
@@ -2699,7 +2768,7 @@ class Application:
         self.statut(f"Rapport enregistré : {Path(chemin).name}")
         if self._demander_ouverture(chemin):
             try:
-                subprocess.Popen(["xdg-open", chemin], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                ouvrir_fichier(chemin)
             except Exception:
                 messagebox.showinfo(TITRE, "Ouverture automatique impossible : ouvrir le PDF depuis le gestionnaire de fichiers.")
 
@@ -3871,7 +3940,7 @@ class Application:
                 messagebox.showerror(TITRE, f"Fichier impossible à créer : {err}", parent=self.root)
                 return
         try:
-            subprocess.Popen(["xdg-open", str(FICHIER_VOCABULAIRE)])
+            ouvrir_fichier(FICHIER_VOCABULAIRE)
             self.statut("Fichier ouvert dans l'éditeur : après modification, « Recharger » (ou revenir sur cet onglet).")
         except OSError:
             messagebox.showinfo(TITRE, f"Ouvrir le fichier à la main :\n{FICHIER_VOCABULAIRE}", parent=self.root)
@@ -4048,8 +4117,14 @@ def main():
     try:
         import tkinter as tk
     except ImportError:
-        sys.exit("Tkinter est absent : sudo apt install -y python3-tk")
+        sys.exit("Tkinter est absent : " + ("réinstaller Python en cochant « tcl/tk and IDLE »." if EST_WINDOWS else "sudo apt install -y python3-tk"))
     import tkinter.font  # noqa: F401  (rend tk.font disponible)
+    if EST_WINDOWS:
+        try:
+            import ctypes
+            ctypes.windll.shcore.SetProcessDpiAwareness(1)                        # texte net sur écrans à échelle > 100 %
+        except Exception:
+            pass
     root = tk.Tk()
     root.withdraw()
     if ICONE.is_file():

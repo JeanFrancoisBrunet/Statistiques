@@ -29,3 +29,8 @@ data/
 .Rhistory
 .Rproj.user/
 old/
+# après Statistiques sous Windows (ajout de directories)
+R-portable/
+dist/
+build/
+fonts/
