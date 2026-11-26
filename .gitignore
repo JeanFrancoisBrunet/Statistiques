@@ -25,6 +25,8 @@ Timekeeping/
 
 # Données de l'application Shiny et fichiers R
 data/
+projets/
+rapports/
 .RData
 .Rhistory
 .Rproj.user/
